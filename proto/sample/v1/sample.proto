@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package sample.v1;
+
+option go_package = "clean-template/proto/sample/v1;samplev1";
+
+service SampleService {
+  rpc ListSample(ListSampleRequest) returns (ListSampleResponse);
+  rpc GetSample(GetSampleRequest) returns (GetSampleResponse);
+  rpc CreateSample(CreateSampleRequest) returns (CreateSampleResponse);
+  rpc UpdateSample(UpdateSampleRequest) returns (UpdateSampleResponse);
+  rpc DeleteSample(DeleteSampleRequest) returns (DeleteSampleResponse);
+}
+
+message Sample {
+  int32 id = 1;
+  string name = 2;
+}
+
+message ListSampleRequest {
+  int32 page = 1;
+  int32 limit = 2;
+}
+
+message ListSampleResponse {
+  repeated Sample samples = 1;
+}
+
+message GetSampleRequest {
+  int32 id = 1;
+}
+
+message GetSampleResponse {
+  Sample sample = 1;
+}
+
+message CreateSampleRequest {
+  string name = 1;
+}
+
+message CreateSampleResponse {
+  Sample sample = 1;
+}
+
+message UpdateSampleRequest {
+  int32 id = 1;
+  string name = 2;
+}
+
+message UpdateSampleResponse {
+  Sample sample = 1;
+}
+
+message DeleteSampleRequest {
+  int32 id = 1;
+}
+
+message DeleteSampleResponse {
+  bool success = 1;
+}

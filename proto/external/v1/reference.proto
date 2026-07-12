@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package external.v1;
+
+option go_package = "clean-template/proto/external/v1;externalv1";
+
+// ReferenceService represents a third-party gRPC contract consumed by this app.
+service ReferenceService {
+  rpc GetReference(GetReferenceRequest) returns (GetReferenceResponse);
+}
+
+message GetReferenceRequest {
+  int32 id = 1;
+}
+
+message GetReferenceResponse {
+  int32 id = 1;
+  string label = 2;
+}

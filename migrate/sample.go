@@ -1,8 +1,8 @@
 package migrate
 
-import "clean-template/internal/models"
+import "clean-template/internal/entity"
 
 func getSampleModel() (res []any) {
-	res = append(res, &models.Sample{})
+	res = append(res, &entity.Sample{})
 	return res
 }
