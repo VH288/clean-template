@@ -2,3 +2,10 @@
 .env.*
 .cursor
 !.env.example
+bin/
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
