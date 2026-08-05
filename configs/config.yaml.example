@@ -1,0 +1,53 @@
+app:
+  name: clean-template
+  env: development # development | staging | production
+  secret: CHANGE_ME
+  version: 0.1.0
+
+http:
+  port: "8081"
+  read_timeout: 15s
+  write_timeout: 15s
+  shutdown_timeout: 10s
+
+grpc:
+  port: "7000"
+  shutdown_timeout: 10s
+
+postgres:
+  host: 127.0.0.1
+  port: "5432"
+  user: root
+  password: CHANGE_ME
+  dbname: sample
+  sslmode: disable
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 30m
+
+redis:
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+
+mongo:
+  uri: mongodb://127.0.0.1:27017
+  database: sample
+
+kafka:
+  brokers:
+    - 127.0.0.1:9092
+  group_id: clean-template
+  topic: sample.events
+
+observability:
+  log_level: info # debug | info | warn | error
+  loki_url: http://127.0.0.1:3100
+  tempo_endpoint: 127.0.0.1:4317
+  metrics_path: /metrics
+  service_name: clean-template
+  trace_sample_ratio: 1.0
+
+external:
+  http_url: https://jsonplaceholder.typicode.com
+  grpc_addr: 127.0.0.1:7001

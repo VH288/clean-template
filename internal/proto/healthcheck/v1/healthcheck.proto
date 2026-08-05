@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package healthcheck.v1;
+
+option go_package = "clean-template/internal/proto/healthcheck/v1;healthv1";
+
+service HealthcheckService {
+  rpc Check(CheckRequest) returns (CheckResponse);
+}
+
+message CheckRequest {}
+
+message Dependency {
+  string name = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message CheckResponse {
+  string status = 1;
+  repeated Dependency dependencies = 2;
+}
