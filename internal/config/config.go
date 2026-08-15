@@ -18,6 +18,7 @@ type Config struct {
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Mongo    MongoConfig    `mapstructure:"mongo"`
 	Kafka    KafkaConfig    `mapstructure:"kafka"`
+	Outbox   OutboxConfig   `mapstructure:"outbox"`
 	Observability ObservabilityConfig `mapstructure:"observability"`
 	External ExternalConfig `mapstructure:"external"`
 }
@@ -75,6 +76,12 @@ type KafkaConfig struct {
 	Brokers []string `mapstructure:"brokers"`
 	GroupID string   `mapstructure:"group_id"`
 	Topic   string   `mapstructure:"topic"`
+}
+
+type OutboxConfig struct {
+	PollInterval time.Duration `mapstructure:"poll_interval"`
+	BatchSize    int           `mapstructure:"batch_size"`
+	MaxRetries   int           `mapstructure:"max_retries"`
 }
 
 type ObservabilityConfig struct {
@@ -156,6 +163,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("kafka.brokers", []string{"127.0.0.1:9092"})
 	v.SetDefault("kafka.group_id", "clean-template")
 	v.SetDefault("kafka.topic", "sample.events")
+	v.SetDefault("outbox.poll_interval", "1s")
+	v.SetDefault("outbox.batch_size", 50)
+	v.SetDefault("outbox.max_retries", 5)
 	v.SetDefault("observability.log_level", "info")
 	v.SetDefault("observability.loki_url", "http://127.0.0.1:3100")
 	v.SetDefault("observability.tempo_endpoint", "127.0.0.1:4317")

@@ -47,10 +47,10 @@ test:
 	$(GO) test ./... -count=1
 
 test-unit:
-	$(GO) test ./internal/domain/... ./internal/pkg/... -count=1 -short
+	$(GO) test ./internal/domain/... ./internal/pkg/... ./internal/infrastructure/... -count=1 -short
 
 test-integration:
-	$(GO) test ./internal/domain/... -count=1 -run Integration
+	$(GO) test ./internal/domain/... ./internal/infrastructure/... -tags=integration -count=1 -run Integration
 
 tidy:
 	$(GO) mod tidy

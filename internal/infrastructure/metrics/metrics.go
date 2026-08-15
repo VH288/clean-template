@@ -34,6 +34,16 @@ var (
 		Name: "healthcheck_dependency_up",
 		Help: "Health status of dependencies (1=up, 0=down)",
 	}, []string{"dependency"})
+
+	KafkaEventsConsumed = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kafka_events_consumed",
+		Help: "Total Kafka events consumed by type and status",
+	}, []string{"type", "status"})
+
+	CacheInvalidateTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cache_invalidate_total",
+		Help: "Total cache invalidation attempts",
+	}, []string{"status"})
 )
 
 func Handler() http.Handler {

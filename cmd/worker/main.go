@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"clean-template/internal/app/bootstrap"
 	"clean-template/internal/config"
-	"clean-template/internal/infrastructure/kafka"
 )
 
 func main() {
@@ -32,21 +30,12 @@ func run() error {
 		return err
 	}
 
-	consumer := kafka.NewConsumer(cfg.Kafka, container.Logger, func(ctx context.Context, key, value []byte) error {
-		var payload map[string]any
-		if err := json.Unmarshal(value, &payload); err != nil {
-			return err
-		}
-		container.Logger.Info("sample event consumed",
-			"key", string(key),
-			"type", payload["type"],
-		)
-		return nil
-	})
-	consumer.Start(ctx)
+	worker := bootstrap.WireWorker(container.Infra, cfg)
+	worker.OutboxRelay.Start(ctx)
+	worker.Consumer.Start(ctx)
 
 	container.Lifecycle.Add(func(ctx context.Context) error {
-		return consumer.Close()
+		return worker.Consumer.Close()
 	})
 	container.Lifecycle.Wait(ctx)
 	return nil

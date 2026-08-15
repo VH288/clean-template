@@ -2,8 +2,8 @@ package bootstrap
 
 import (
 	samplehandler "clean-template/internal/domain/sample/handler"
-	samplerepo "clean-template/internal/domain/sample/repository"
 	sampleusecase "clean-template/internal/domain/sample/usecase"
+	samplepersist "clean-template/internal/infrastructure/persistence/sample"
 )
 
 // Sample is the manually wired sample domain module.
@@ -15,12 +15,11 @@ type Sample struct {
 
 // wireSample wires sample: repository → usecase → handlers.
 func wireSample(infra *Infra) *Sample {
-	repo := samplerepo.NewPostgresRepository(infra.DB)
-	cache := samplerepo.NewRedisRepository(infra.Redis)
-	document := samplerepo.NewMongoRepository(infra.Mongo.Database)
-	publisher := samplerepo.NewKafkaPublisher(infra.KafkaProd)
+	repo := samplepersist.NewPostgresRepository(infra.DB)
+	cache := samplepersist.NewRedisRepository(infra.Redis)
+	document := samplepersist.NewMongoRepository(infra.Mongo.Database)
 
-	uc := sampleusecase.New(repo, cache, document, publisher)
+	uc := sampleusecase.New(repo, cache, document)
 
 	return &Sample{
 		HTTP: samplehandler.NewHTTPHandler(uc),

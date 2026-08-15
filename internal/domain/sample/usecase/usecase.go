@@ -2,10 +2,12 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 
 	"clean-template/internal/domain/sample"
 	"clean-template/internal/domain/sample/entity"
+	"clean-template/internal/domain/sample/event"
 	"clean-template/internal/infrastructure/apm"
 	"clean-template/internal/infrastructure/logger"
 	"clean-template/internal/infrastructure/metrics"
@@ -14,23 +16,20 @@ import (
 )
 
 type SampleUsecase struct {
-	repo      sample.Repository
-	cache     sample.CacheRepository
-	document  sample.DocumentRepository
-	publisher sample.EventPublisher
+	repo     sample.Repository
+	cache    sample.CacheRepository
+	document sample.DocumentRepository
 }
 
 func New(
 	repo sample.Repository,
 	cache sample.CacheRepository,
 	document sample.DocumentRepository,
-	publisher sample.EventPublisher,
 ) *SampleUsecase {
 	return &SampleUsecase{
-		repo:      repo,
-		cache:     cache,
-		document:  document,
-		publisher: publisher,
+		repo:     repo,
+		cache:    cache,
+		document: document,
 	}
 }
 
@@ -49,14 +48,22 @@ func (u *SampleUsecase) Create(ctx context.Context, name, description, status st
 		Status:      status,
 	}
 
-	if err := u.repo.Create(ctx, s); err != nil {
+	payload, err := marshalEvent(event.TypeCreated, s)
+	if err != nil {
+		metrics.SampleOperationsTotal.WithLabelValues("create", "error").Inc()
+		return nil, apperrors.Wrap(err, apperrors.CodeInternal, "failed to build event")
+	}
+
+	if err := u.repo.CreateWithEvent(ctx, s, event.TypeCreated, payload); err != nil {
 		metrics.SampleOperationsTotal.WithLabelValues("create", "error").Inc()
 		return nil, apperrors.Wrap(err, apperrors.CodeInternal, "failed to create sample")
 	}
 
-	_ = u.cache.Set(ctx, s)
-	_ = u.document.Upsert(ctx, s)
-	_ = u.publisher.PublishSampleEvent(ctx, "sample.created", s)
+	// demo: direct multi-store write; not transactional with Postgres
+	if err := u.document.Upsert(ctx, s); err != nil {
+		log.Warn("mongo upsert failed after create", slog.String("id", s.ID), slog.String("error", err.Error()))
+	}
+	u.invalidateCache(ctx, s.ID)
 
 	metrics.SampleOperationsTotal.WithLabelValues("create", "success").Inc()
 	log.Info("sample created", slog.String("id", s.ID))
@@ -114,14 +121,22 @@ func (u *SampleUsecase) Update(ctx context.Context, id, name, description, statu
 	existing.Description = description
 	existing.Status = status
 
-	if err := u.repo.Update(ctx, existing); err != nil {
+	payload, err := marshalEvent(event.TypeUpdated, existing)
+	if err != nil {
+		metrics.SampleOperationsTotal.WithLabelValues("update", "error").Inc()
+		return nil, apperrors.Wrap(err, apperrors.CodeInternal, "failed to build event")
+	}
+
+	if err := u.repo.UpdateWithEvent(ctx, existing, event.TypeUpdated, payload); err != nil {
 		metrics.SampleOperationsTotal.WithLabelValues("update", "error").Inc()
 		return nil, apperrors.Wrap(err, apperrors.CodeInternal, "failed to update sample")
 	}
 
-	_ = u.cache.Set(ctx, existing)
-	_ = u.document.Upsert(ctx, existing)
-	_ = u.publisher.PublishSampleEvent(ctx, "sample.updated", existing)
+	// demo: direct multi-store write; not transactional with Postgres
+	if err := u.document.Upsert(ctx, existing); err != nil {
+		log.Warn("mongo upsert failed after update", slog.String("id", existing.ID), slog.String("error", err.Error()))
+	}
+	u.invalidateCache(ctx, existing.ID)
 
 	metrics.SampleOperationsTotal.WithLabelValues("update", "success").Inc()
 	log.Info("sample updated", slog.String("id", existing.ID))
@@ -140,16 +155,36 @@ func (u *SampleUsecase) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := u.repo.Delete(ctx, id); err != nil {
+	payload, err := marshalEvent(event.TypeDeleted, existing)
+	if err != nil {
+		metrics.SampleOperationsTotal.WithLabelValues("delete", "error").Inc()
+		return apperrors.Wrap(err, apperrors.CodeInternal, "failed to build event")
+	}
+
+	if err := u.repo.DeleteWithEvent(ctx, id, event.TypeDeleted, payload); err != nil {
 		metrics.SampleOperationsTotal.WithLabelValues("delete", "error").Inc()
 		return apperrors.Wrap(err, apperrors.CodeInternal, "failed to delete sample")
 	}
 
-	_ = u.cache.Delete(ctx, id)
-	_ = u.document.Delete(ctx, id)
-	_ = u.publisher.PublishSampleEvent(ctx, "sample.deleted", existing)
+	// demo: direct multi-store write; not transactional with Postgres
+	if err := u.document.Delete(ctx, id); err != nil {
+		log.Warn("mongo delete failed after delete", slog.String("id", id), slog.String("error", err.Error()))
+	}
+	u.invalidateCache(ctx, id)
 
 	metrics.SampleOperationsTotal.WithLabelValues("delete", "success").Inc()
 	log.Info("sample deleted", slog.String("id", id))
 	return nil
+}
+
+func marshalEvent(eventType string, s *entity.Sample) ([]byte, error) {
+	return json.Marshal(event.Envelope{Type: eventType, Sample: s})
+}
+
+func (u *SampleUsecase) invalidateCache(ctx context.Context, id string) {
+	if err := u.cache.Delete(ctx, id); err != nil {
+		metrics.CacheInvalidateTotal.WithLabelValues("error").Inc()
+		return
+	}
+	metrics.CacheInvalidateTotal.WithLabelValues("success").Inc()
 }

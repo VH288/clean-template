@@ -31,7 +31,46 @@ Template service dengan Clean Architecture + multi-transport (HTTP / gRPC / WebS
 - HTTP `/api/v1/samples`
 - gRPC `sample.v1.SampleService`
 - WebSocket `/api/v1/ws/samples`
-- Persist ke Postgres, cache Redis, document Mongo, event Kafka
+- Persist ke Postgres (source of truth), cache Redis, document Mongo (direct write), event Kafka (transactional outbox)
+
+## Multi-store & messaging patterns
+
+| Store / bus | Role |
+|---|---|
+| **Postgres** | Source of truth; sample + `outbox_events` in one TX on writes |
+| **Mongo** | Demo direct write dari usecase setelah Postgres sukses (bukan via consumer) |
+| **Redis** | Cache-aside on read; invalidate (`Delete`) on write |
+| **Kafka publish** | Transactional outbox → worker outbox relay → topic `sample.events` |
+| **Kafka consume** | Worker `EventHandler`: subscribe `group_id` + `topic`, parse `event.Envelope`, dispatch by type |
+
+```mermaid
+sequenceDiagram
+    participant API
+    participant UC as Usecase
+    participant PG as Postgres
+    participant MG as Mongo
+    participant RD as Redis
+    participant OB as Outbox relay
+    participant KF as Kafka
+    participant CN as Consumer
+
+    API->>UC: POST /samples
+    UC->>PG: TX sample + outbox_events
+    UC->>MG: Upsert (best-effort)
+    UC->>RD: Delete cache key
+    OB->>PG: poll pending outbox
+    OB->>KF: publish envelope
+    CN->>KF: subscribe (group_id)
+    CN->>CN: log + metrics
+```
+
+**Consumer group:** `kafka.group_id` (default `clean-template`). Semua worker instance dengan group yang sama share partition assignment (rebalance otomatis).
+
+**Run worker (outbox relay + consumer):**
+
+```bash
+make run-worker
+```
 
 ## Quick start
 
@@ -49,7 +88,7 @@ make run-api
 ```bash
 make run-api          # go run ./cmd/api
 make run-grpc         # gRPC only
-make run-worker       # Kafka consumer
+make run-worker       # outbox relay + Kafka consumer
 make migrate-up
 make proto            # generate protobuf
 make test-unit
@@ -74,8 +113,8 @@ make docker-up
 cmd/                  entrypoints (api, grpc, worker, migrate)
 internal/app/         bootstrap (manual DI per domain), middleware, router, server, lifecycle
 internal/config/      viper config
-internal/domain/      healthcheck, sample
-internal/infrastructure/  db, redis, mongo, kafka, logger, apm, metrics, ws, grpc
+internal/domain/      healthcheck, sample (entities, ports, usecase, handlers)
+internal/infrastructure/  persistence, messaging, outbox, db, redis, mongo, kafka, logger, apm, metrics, ws, grpc
 internal/pkg/         errors, formatter, validator, testutil
 internal/proto/       protobuf sources + generated stubs
 migrations/           goose

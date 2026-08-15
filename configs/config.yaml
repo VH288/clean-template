@@ -40,6 +40,11 @@ kafka:
   group_id: clean-template
   topic: sample.events
 
+outbox:
+  poll_interval: 1s
+  batch_size: 50
+  max_retries: 5
+
 observability:
   log_level: info
   loki_url: http://127.0.0.1:3100
