@@ -107,6 +107,10 @@ make docker-up
 
 `internal/app/lifecycle` menunggu SIGINT/SIGTERM lalu menjalankan shutdown hooks LIFO (HTTP → gRPC → Kafka → Mongo → Redis → Postgres → APM).
 
+## Documentation
+
+Full English codebase guide (per-layer and per-file): [docs/README.md](docs/README.md)
+
 ## Layout
 
 ```
