@@ -1,7 +1,6 @@
 # Clean Template — Documentation
 
 English documentation for the **clean-template** Go service: a Clean Architecture scaffold with multi-transport APIs (HTTP, gRPC, WebSocket), multi-store persistence, and transactional outbox messaging.
-test
 
 ## What this template is
 
