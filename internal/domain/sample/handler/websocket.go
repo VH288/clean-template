@@ -6,24 +6,24 @@ import (
 	"fmt"
 	"net/http"
 
+	"clean-template/internal/domain/ports"
 	"clean-template/internal/domain/sample"
 	"clean-template/internal/domain/sample/dto"
 	"clean-template/internal/domain/sample/mapper"
-	infraws "clean-template/internal/infrastructure/websocket"
 	"clean-template/internal/pkg/validator"
 )
 
 type WSHandler struct {
 	usecase sample.Usecase
-	hub     *infraws.Hub
+	hub     ports.WebSocketHub
 }
 
-func NewWSHandler(usecase sample.Usecase, hub *infraws.Hub) *WSHandler {
+func NewWSHandler(usecase sample.Usecase, hub ports.WebSocketHub) *WSHandler {
 	return &WSHandler{usecase: usecase, hub: hub}
 }
 
 type wsEnvelope struct {
-	Action string          `json:"action"`
+	Action  string          `json:"action"`
 	Payload json.RawMessage `json:"payload"`
 }
 
@@ -36,23 +36,23 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	for {
-		_, data, err := conn.Read(ctx)
+		data, err := conn.Read(ctx)
 		if err != nil {
 			return
 		}
 
 		var env wsEnvelope
 		if err := json.Unmarshal(data, &env); err != nil {
-			_ = infraws.WriteJSON(ctx, conn, map[string]any{"error": "invalid payload"})
+			_ = h.hub.WriteJSON(ctx, conn, map[string]any{"error": "invalid payload"})
 			continue
 		}
 
 		resp, err := h.dispatch(ctx, env)
 		if err != nil {
-			_ = infraws.WriteJSON(ctx, conn, map[string]any{"error": err.Error()})
+			_ = h.hub.WriteJSON(ctx, conn, map[string]any{"error": err.Error()})
 			continue
 		}
-		_ = infraws.WriteJSON(ctx, conn, resp)
+		_ = h.hub.WriteJSON(ctx, conn, resp)
 	}
 }
 

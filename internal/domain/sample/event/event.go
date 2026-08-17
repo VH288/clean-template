@@ -10,6 +10,7 @@ const (
 
 // Envelope is the shared publish/consume contract for sample domain events.
 type Envelope struct {
-	Type   string         `json:"type"`
-	Sample *entity.Sample `json:"sample"`
+	EventID string         `json:"event_id"`
+	Type    string         `json:"type"`
+	Sample  *entity.Sample `json:"sample"`
 }

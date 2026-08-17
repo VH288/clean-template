@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [master, clean, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: password123
+          POSTGRES_DB: sample
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U root -d sample"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Unit tests
+        run: make test-unit
+
+      - name: Vet
+        run: make lint
+
+      - name: Integration tests
+        env:
+          DATABASE_URL: host=127.0.0.1 port=5432 user=root password=password123 dbname=sample sslmode=disable
+        run: |
+          go run ./cmd/migrate -dir migrations up
+          make test-integration

@@ -1,6 +1,6 @@
 # Infrastructure (`internal/infrastructure/`)
 
-Adapters for databases, messaging, outbox relay, external clients, WebSocket hub, and observability. Implements domain ports and supports worker processes.
+Adapters for databases, messaging, outbox relay, telemetry, external clients, WebSocket hub, and observability. Implements domain ports and supports worker processes.
 
 Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.md).
 
@@ -16,7 +16,7 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
   - `NewPostgres(cfg)` — connect, configure pool, ping with 5s timeout
   - `Ping(ctx, db)` — `PingContext` wrapper for healthcheck
 - **Dependencies:** `config.PostgresConfig`, `sqlx`, `lib/pq`
-- **Used by:** `bootstrap.wireInfra`, healthcheck `PostgresPing`
+- **Used by:** `bootstrap.wireInfra`, `healthcheck.PostgresPing`
 - **Patterns:** Connection pool tuning from config
 - **Notes:** Returns error if initial ping fails; caller must close on failure paths in bootstrap.
 
@@ -53,15 +53,16 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
 
 ### `kafka/kafka.go`
 
-- **Purpose:** Kafka producer and consumer using segmentio/kafka-go.
+- **Purpose:** Kafka producer, DLQ producer, and consumer using segmentio/kafka-go.
 - **Layer / role:** Messaging infrastructure.
 - **Key types / functions:**
   - `Producer` — `NewProducer`, `Publish(ctx, key, value)`, `Close`
-  - `Consumer` — `NewConsumer`, `Start(ctx)` goroutine, `Close`
+  - `DLQProducer` — `NewDLQProducer`, `PublishDLQ(ctx, key, value, reason)`, `Close`
+  - `Consumer` — `NewConsumer`, `Start(ctx)`, `Stop`, `Close`
 - **Dependencies:** `config.KafkaConfig`, `kafka-go`
-- **Used by:** Bootstrap (producer), worker (consumer), sample publisher
-- **Patterns:** Sync producer (`Async: false`, `RequireOne` acks); consumer commit after successful handler
-- **Notes:** Consumer retries handler failures without commit (offset not advanced). Fetch errors log and continue unless context cancelled.
+- **Used by:** Bootstrap (producer), worker (consumer + DLQ), sample publisher
+- **Patterns:** Sync producer (`Async: false`, `RequireOne` acks); consumer commit after successful handler; fetch backoff; poison message commit after DLQ or max retries
+- **Notes:** `isPoison` callback determines immediate DLQ routing. Handler failures retry without commit until `max_handler_retries`.
 
 ---
 
@@ -102,9 +103,55 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
   - `Hub` — `Upgrade`, `Unregister`, `BroadcastJSON`
   - `WriteJSON(ctx, conn, payload)` — single-connection JSON write
 - **Dependencies:** `github.com/coder/websocket`
-- **Used by:** Sample and healthcheck WS handlers
+- **Used by:** `PortsAdapter`, bootstrap
 - **Patterns:** Hub tracks active connections; handlers own read loops
 - **Notes:** `InsecureSkipVerify: true` on accept (dev-friendly). Unregister closes with normal closure status.
+
+---
+
+### `websocket/ports_adapter.go`
+
+- **Purpose:** Adapts `Hub` to `domain/ports.WebSocketHub` for domain handlers.
+- **Layer / role:** Port adapter.
+- **Key types / functions:**
+  - `PortsAdapter` — `Upgrade`, `Unregister`, `WriteJSON`
+  - `connAdapter` — wraps `*websocket.Conn` as `ports.WebSocketConn`
+- **Dependencies:** `domain/ports`, `Hub`
+- **Used by:** `bootstrap.wireSample`, `bootstrap.wireHealthcheck`
+- **Patterns:** Anti-corruption layer between domain and coder/websocket
+- **Notes:** Keeps domain handlers free of infrastructure imports.
+
+---
+
+## Healthcheck adapters
+
+### `healthcheck/ping.go`
+
+- **Purpose:** Infrastructure ping adapters satisfying healthcheck checker ports.
+- **Layer / role:** Healthcheck infrastructure adapters.
+- **Key types / functions:**
+  - `PostgresPing`, `RedisPing`, `MongoPing`, `GRPCPing`
+- **Dependencies:** `database`, `redis`, `mongodb`, `grpc` packages
+- **Used by:** `bootstrap.wireHealthcheck`
+- **Patterns:** Moved from domain package to respect dependency rule
+- **Notes:** `GRPCPing` returns nil when client is nil.
+
+---
+
+## Telemetry adapters
+
+### `telemetry/telemetry.go`
+
+- **Purpose:** Implements `domain/ports` telemetry interfaces using slog, OpenTelemetry, and Prometheus.
+- **Layer / role:** Observability port adapters.
+- **Key types / functions:**
+  - `Tracer`, `SlogLogger`, `SampleMetrics`, `HealthMetrics`, `GRPCMetrics` — production adapters
+  - `NoopTracer`, `NoopLogger`, `NoopSampleMetrics`, etc. — test no-ops
+  - `DiscardLogger()` — slog discard handler for tests
+- **Dependencies:** `apm`, `logger`, `metrics`, `domain/ports`
+- **Used by:** Bootstrap wiring, unit tests
+- **Patterns:** Domain depends on ports; infrastructure provides concrete metrics/tracing
+- **Notes:** Keeps usecases free of direct Prometheus/OTel imports.
 
 ---
 
@@ -119,7 +166,7 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
   - `FromContext(ctx)`, `WithContext(ctx, log)` — context logger propagation
   - `parseLevel` — debug/info/warn/error
 - **Dependencies:** `config.ObservabilityConfig`, `pkg/constant`
-- **Used by:** Bootstrap (`slog.SetDefault`), middleware logging
+- **Used by:** Bootstrap (`slog.SetDefault`), middleware logging, telemetry `SlogLogger`
 - **Patterns:** Context-carried slog for request-scoped fields
 - **Notes:** JSON stdout is Loki-friendly when scraped by Alloy/Promtail.
 
@@ -132,9 +179,9 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
 - **Key types / functions:**
   - `Provider` — holds `TracerProvider`
   - `Init(ctx, cfg, log)` — OTLP exporter, resource, parent-based ratio sampler
-  - `Shutdown(ctx)`, `Tracer(name)`, `Start(ctx, name)` — span helper used by usecases
+  - `Shutdown(ctx)`, `Tracer(name)`, `Start(ctx, name)` — span helper
 - **Dependencies:** OTel SDK, OTLP gRPC exporter, `config`
-- **Used by:** Bootstrap, sample/healthcheck usecases, middleware tracing
+- **Used by:** Bootstrap, `telemetry.Tracer` adapter, middleware tracing
 - **Patterns:** Global `otel.SetTracerProvider`; trace context propagation
 - **Notes:** Init failure in bootstrap is non-fatal. Endpoint from `observability.tempo_endpoint`.
 
@@ -145,16 +192,19 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
 - **Purpose:** Prometheus metric definitions and `/metrics` handler.
 - **Layer / role:** Metrics infrastructure.
 - **Key types / functions:**
-  - `HTTPRequestsTotal`, `HTTPRequestDuration` — HTTP middleware metrics
+  - `HTTPRequestsTotal`, `HTTPRequestDuration` — HTTP middleware (route pattern labels)
   - `GRPCRequestsTotal` — gRPC handler counters
   - `SampleOperationsTotal` — domain operation outcomes
   - `HealthcheckStatus` — dependency up/down gauge (1/0)
-  - `KafkaEventsConsumed`, `CacheInvalidateTotal`
+  - `KafkaEventsConsumed` — includes `duplicate` status label
+  - `CacheInvalidateTotal`, `CacheOperationsTotal`
+  - `MongoSyncFailuresTotal` — Mongo best-effort write failures
+  - `OutboxEventsPending`, `OutboxEventsFailed` — outbox relay gauges
   - `Handler()` — `promhttp.Handler()`
 - **Dependencies:** `prometheus/client_golang`
-- **Used by:** Middleware, handlers, usecases, consumer, router
+- **Used by:** Middleware, telemetry adapters, consumer, outbox relay, router
 - **Patterns:** `promauto` registration at package init
-- **Notes:** HTTP metrics label by method, path, status (high cardinality on path in production — consider route templates later).
+- **Notes:** HTTP metrics use chi route patterns (not raw URLs) to avoid UUID cardinality.
 
 ---
 
@@ -162,17 +212,17 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
 
 ### `postgres.go`
 
-- **Purpose:** Postgres implementation of `sample.Repository` with transactional outbox inserts.
+- **Purpose:** Postgres implementation of `sample.Repository` with transactional outbox inserts and optimistic locking.
 - **Layer / role:** Persistence adapter.
 - **Key types / functions:**
   - `PostgresRepository` — `NewPostgresRepository(db)`
-  - CRUD + `CreateWithEvent`, `UpdateWithEvent`, `DeleteWithEvent`
+  - CRUD + `CreateWithEvent`, `UpdateWithEvent`, `DeleteWithEvent` (with `eventID`)
   - `insertOutboxEvent` — writes pending row in same TX
-  - `postgresModel`, `toModel`, `fromModel` — DB mapping
+  - `postgresModel`, `toModel`, `fromModel` — DB mapping including `version`
 - **Dependencies:** `sqlx`, `entity`, `pkg/errors`, `uuid`
 - **Used by:** `bootstrap.wireSample`, outbox relay (reads `outbox_events`)
-- **Patterns:** Transactional outbox; UUID ID generation on create
-- **Notes:** `ErrNotFound` on missing rows. Outbox: `aggregate_type=sample`, status `pending`. See [ADR 001](../adr/001-transactional-outbox.md).
+- **Patterns:** Transactional outbox; UUID ID generation on create; version check on update
+- **Notes:** `ErrNotFound` on missing rows; `ErrConflict` on stale version. Outbox: `aggregate_type=sample`, status lifecycle `pending` → `processing` → `published`/`failed`. See [ADR 001](../adr/001-transactional-outbox.md).
 
 ---
 
@@ -203,7 +253,7 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
 - **Dependencies:** `mongo-driver`, `entity`, `pkg/errors`
 - **Used by:** `bootstrap.wireSample`
 - **Patterns:** Direct document upsert (not via Kafka consumer)
-- **Notes:** `ErrNoDocuments` → `ErrNotFound`. Demo multi-store write from usecase.
+- **Notes:** `ErrNoDocuments` → `ErrNotFound`. Demo multi-store write from usecase; failures warned in usecase.
 
 ---
 
@@ -223,17 +273,40 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
 
 ---
 
+### `idempotency.go`
+
+- **Purpose:** Postgres-backed idempotency store for Kafka consumer.
+- **Layer / role:** Messaging infrastructure.
+- **Key types / functions:**
+  - `IdempotencyStore` interface — `IsProcessed`, `MarkProcessed`
+  - `PostgresIdempotencyStore` — uses `processed_events` table
+- **Dependencies:** `sqlx`
+- **Used by:** `EventHandler`, `bootstrap.WireWorker`
+- **Patterns:** At-least-once consumer with dedup by `event_id`
+- **Notes:** `ON CONFLICT DO NOTHING` on mark processed.
+
+---
+
 ### `consumer_handler.go`
 
-- **Purpose:** Kafka consumer handler: parse `event.Envelope`, dispatch by type, log and metric.
+- **Purpose:** Kafka consumer handler: parse `event.Envelope`, idempotency check, dispatch by type, DLQ poison messages.
 - **Layer / role:** Messaging adapter (consumer).
 - **Key types / functions:**
-  - `EventHandler` — `NewEventHandler(logger)`
-  - `Handle(ctx, key, value)` — unmarshal, validate, switch on type
+  - `EventHandler` — `NewEventHandler(logger, store, dlq)`
+  - `Handle(ctx, key, value)` — unmarshal, idempotency, validate, switch on type
+  - `ErrPoisonMessage` — sentinel for DLQ routing
 - **Dependencies:** `domain/sample/event`, `metrics`
 - **Used by:** `bootstrap.WireWorker` → `kafka.Consumer`
-- **Patterns:** Extension point for side effects (email, analytics)
-- **Notes:** Unknown types logged and skipped (handler returns nil → commit). Invalid JSON returns error (no commit). Empty type or nil sample returns error.
+- **Patterns:** Extension point for side effects; idempotent dispatch
+- **Notes:** Unknown types logged and skipped (commit). Missing `event_id` or invalid JSON → DLQ + poison error. Duplicates increment `kafka_events_consumed{type="duplicate"}`.
+
+---
+
+### `errors.go`
+
+- **Purpose:** `IsPoisonError` helper for Kafka consumer poison routing.
+- **Layer / role:** Messaging utilities.
+- **Used by:** `bootstrap.WireWorker`, consumer tests
 
 ---
 
@@ -241,30 +314,35 @@ Cross-link: [ADR 001 — Transactional Outbox](../adr/001-transactional-outbox.m
 
 ### `outbox/relay.go`
 
-- **Purpose:** Background poller: claims pending outbox rows, publishes to Kafka, marks published or retries/fails.
+- **Purpose:** Background poller: two-phase claim and publish outbox rows to Kafka.
 - **Layer / role:** Outbox relay worker.
 - **Key types / functions:**
   - `Relay` — `NewRelay(db, publisher, logger, cfg)`
-  - `Start(ctx)` — ticker loop on `PollInterval`
-  - `processBatch` — `FOR UPDATE SKIP LOCKED`, publish, update status
+  - `Start(ctx)` / `Stop()` — ticker loop with graceful shutdown
+  - `claimBatch` — TX: select pending `FOR UPDATE SKIP LOCKED` → set `processing`
+  - `publishRow` — publish outside TX → mark `published` or retry/fail
+  - `resetStaleProcessing` — reclaim crashed worker claims
+  - `refreshGauges` — update `outbox_events_pending` / `outbox_events_failed`
+  - `ReplayFailed(ctx)` — reset failed rows to pending
   - `ProcessBatchForTest` — test exposure
-- **Dependencies:** `sqlx`, `config.OutboxConfig`, `eventPublisher` interface
-- **Used by:** `cmd/worker`, integration tests
-- **Patterns:** Transactional outbox relay; SKIP LOCKED for concurrent workers
-- **Notes:** On publish failure: increment `retry_count`, stay `pending` until `max_retries` then `failed`. Success sets `published` + `published_at`. See [ADR 001](../adr/001-transactional-outbox.md).
+- **Dependencies:** `sqlx`, `config.OutboxConfig`, `eventPublisher` interface, `metrics`
+- **Used by:** `cmd/worker`, `cmd/outbox-replay`, integration/unit tests
+- **Patterns:** Two-phase transactional outbox relay; SKIP LOCKED for concurrent workers
+- **Notes:** On publish failure: increment `retry_count`, reset to `pending` until `max_retries` then `failed`. Success sets `published` + `published_at`. See [ADR 001](../adr/001-transactional-outbox.md).
 
 ---
 
-## Integration tests (grouped)
+## Tests (grouped)
 
 | File | Scope |
 |------|-------|
 | `persistence/sample/postgres_integration_test.go` | Real Postgres CRUD and outbox insert in transaction |
 | `outbox/relay_integration_test.go` | Relay batch processing against real DB |
-| `messaging/sample/consumer_handler_test.go` | Unit tests for envelope parsing and dispatch |
+| `outbox/relay_test.go` | sqlmock unit tests for claim/publish/retry |
+| `messaging/sample/consumer_handler_test.go` | Envelope parsing, idempotency, poison errors |
 | `messaging/sample/consumer_integration_test.go` | Integration tests with Kafka (tags/integration) |
 
-Run integration: `DATABASE_URL=... make test-integration`.
+Run unit: `make test-unit`. Run integration: `DATABASE_URL=... make test-integration`.
 
 ---
 
@@ -272,4 +350,4 @@ Run integration: `DATABASE_URL=... make test-integration`.
 
 - [Sample domain](../layers/domain-sample.md)
 - [Worker entrypoint](../layers/cmd.md#cmdworkermain.go)
-- [Migrations](../layers/migrations.md) — `outbox_events` schema
+- [Migrations](../layers/migrations.md) — `outbox_events`, `processed_events` schemas

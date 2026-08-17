@@ -26,6 +26,11 @@ func Build(ctx context.Context, cfg *config.Config) (*Container, error) {
 }
 
 func (c *Container) HTTPRouter() http.Handler {
+	auth := middleware.SkipPaths(
+		[]string{"/api/v1/health", "/api/v1/ws/health"},
+		middleware.APIKeyAuth(c.Config.App.Secret),
+	)
+
 	return router.New(router.Dependencies{
 		SampleHTTP:  c.Sample.HTTP,
 		SampleWS:    c.Sample.WS,
@@ -33,6 +38,8 @@ func (c *Container) HTTPRouter() http.Handler {
 		HealthWS:    c.Healthcheck.WS,
 		Middlewares: c.middlewares(),
 		MetricsPath: c.Config.Observability.MetricsPath,
+		MetricsAuth: middleware.MetricsAuth(c.Config.App.Secret),
+		APIAuth:     auth,
 	})
 }
 

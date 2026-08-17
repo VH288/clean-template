@@ -20,12 +20,13 @@ type Dependencies struct {
 	HealthWS    *healthhandler.WSHandler
 	Middlewares []func(http.Handler) http.Handler
 	MetricsPath string
+	MetricsAuth func(http.Handler) http.Handler
+	APIAuth     func(http.Handler) http.Handler
 }
 
 func New(deps Dependencies) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RealIP)
-	r.Use(chimw.RequestID)
 	for _, mw := range deps.Middlewares {
 		r.Use(mw)
 	}
@@ -38,13 +39,23 @@ func New(deps Dependencies) http.Handler {
 	if deps.MetricsPath == "" {
 		deps.MetricsPath = "/metrics"
 	}
-	r.Handle(deps.MetricsPath, metrics.Handler())
+	metricsHandler := metrics.Handler()
+	if deps.MetricsAuth != nil {
+		metricsHandler = deps.MetricsAuth(metricsHandler)
+	}
+	r.Handle(deps.MetricsPath, metricsHandler)
 
 	r.Route("/api/v1", func(api chi.Router) {
 		healthtransport.RegisterHTTP(api, deps.HealthHTTP)
-		sampletransport.RegisterHTTP(api, deps.SampleHTTP)
 		healthtransport.RegisterWebSocket(api, deps.HealthWS)
-		sampletransport.RegisterWebSocket(api, deps.SampleWS)
+
+		api.Group(func(protected chi.Router) {
+			if deps.APIAuth != nil {
+				protected.Use(deps.APIAuth)
+			}
+			sampletransport.RegisterHTTP(protected, deps.SampleHTTP)
+			sampletransport.RegisterWebSocket(protected, deps.SampleWS)
+		})
 	})
 
 	return r

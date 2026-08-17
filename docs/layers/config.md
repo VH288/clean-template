@@ -16,7 +16,7 @@
 - **Dependencies:** `github.com/spf13/viper`
 - **Used by:** All `cmd/*` entrypoints, bootstrap
 - **Patterns:** Viper file + env overlay; missing config file allowed when env/defaults suffice
-- **Notes:** Env keys use `_` replacer for nested fields (e.g. `HTTP_PORT`). `app.secret` bound to `APP_SECRET`. Outbox defaults: poll 1s, batch 50, max retries 5.
+- **Notes:** Env keys use `_` replacer for nested fields (e.g. `HTTP_PORT`). `app.secret` bound to `APP_SECRET` — used for `X-API-Key` auth when not placeholder.
 
 #### Config struct reference
 
@@ -28,8 +28,8 @@
 | `postgres` | host, port, user, password, dbname, pool settings | `127.0.0.1:5432`, db `sample` |
 | `redis` | `addr`, `password`, `db` | `127.0.0.1:6379` |
 | `mongo` | `uri`, `database` | local Mongo, db `sample` |
-| `kafka` | `brokers`, `group_id`, `topic` | `sample.events`, group `clean-template` |
-| `outbox` | `poll_interval`, `batch_size`, `max_retries` | `1s`, `50`, `5` |
+| `kafka` | `brokers`, `group_id`, `topic`, `dlq_topic`, `max_handler_retries` | `sample.events`, DLQ `sample.events.dlq`, retries `3` |
+| `outbox` | `poll_interval`, `batch_size`, `max_retries`, `processing_stale_after` | `1s`, `50`, `5`, `5m` |
 | `observability` | log level, Loki URL, Tempo endpoint, metrics path, service name, trace sample ratio | `/metrics`, ratio `1.0` |
 | `external` | `http_url`, `grpc_addr` | jsonplaceholder, `127.0.0.1:7001` |
 
@@ -40,16 +40,17 @@
 - **Purpose:** Committed example configuration for local development; copy to `configs/config.yaml`.
 - **Layer / role:** Configuration template.
 - **Key fields:**
-  - `app.secret` — placeholder `CHANGE_ME` (never commit real secrets)
+  - `app.secret` — placeholder `CHANGE_ME` (auth disabled until set to a real value)
   - `postgres.password` — placeholder `CHANGE_ME`
   - `http.port` / `grpc.port` — API listen ports
-  - `kafka.brokers`, `group_id`, `topic` — worker consumer and outbox publish target
+  - `kafka.brokers`, `group_id`, `topic`, `dlq_topic`, `max_handler_retries` — worker consumer, outbox publish, DLQ
+  - `outbox.poll_interval`, `batch_size`, `max_retries`, `processing_stale_after` — relay tuning
   - `observability.*` — logging, Tempo OTLP gRPC endpoint, Prometheus metrics path
   - `external.*` — optional upstream HTTP API and gRPC health probe target
 - **Dependencies:** None (YAML only)
 - **Used by:** Developers copy to `configs/config.yaml` for local runs
 - **Patterns:** Example-only; secrets as placeholders
-- **Notes:** Does not include `outbox` section — those values come from `setDefaults` in `config.go`. Add explicit `outbox:` block in your local copy to override defaults.
+- **Notes:** All sections including `outbox` are documented in the example file.
 
 ---
 

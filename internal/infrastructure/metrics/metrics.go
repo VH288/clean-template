@@ -44,6 +44,26 @@ var (
 		Name: "cache_invalidate_total",
 		Help: "Total cache invalidation attempts",
 	}, []string{"status"})
+
+	CacheOperationsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cache_operations_total",
+		Help: "Total cache read/write operations",
+	}, []string{"operation", "status"})
+
+	MongoSyncFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "mongo_sync_failures_total",
+		Help: "Total Mongo best-effort sync failures after Postgres commit",
+	}, []string{"operation"})
+
+	OutboxEventsPending = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "outbox_events_pending",
+		Help: "Number of pending outbox events",
+	})
+
+	OutboxEventsFailed = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "outbox_events_failed",
+		Help: "Number of failed outbox events",
+	})
 )
 
 func Handler() http.Handler {

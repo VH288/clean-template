@@ -13,9 +13,9 @@ type Repository interface {
 	Update(ctx context.Context, sample *entity.Sample) error
 	Delete(ctx context.Context, id string) error
 
-	CreateWithEvent(ctx context.Context, sample *entity.Sample, eventType string, eventPayload []byte) error
-	UpdateWithEvent(ctx context.Context, sample *entity.Sample, eventType string, eventPayload []byte) error
-	DeleteWithEvent(ctx context.Context, id, eventType string, eventPayload []byte) error
+	CreateWithEvent(ctx context.Context, sample *entity.Sample, eventType, eventID string, eventPayload []byte) error
+	UpdateWithEvent(ctx context.Context, sample *entity.Sample, eventType, eventID string, eventPayload []byte) error
+	DeleteWithEvent(ctx context.Context, id, eventType, eventID string, eventPayload []byte) error
 }
 
 type CacheRepository interface {

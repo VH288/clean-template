@@ -1,6 +1,6 @@
 # Application Layer (`internal/app/`)
 
-Bootstrap (manual DI), HTTP router, server wrappers, gRPC server assembly, middleware, and graceful shutdown lifecycle.
+Bootstrap (manual DI), HTTP router, server wrappers, gRPC server assembly, middleware (including auth), and graceful shutdown lifecycle.
 
 ---
 
@@ -8,16 +8,16 @@ Bootstrap (manual DI), HTTP router, server wrappers, gRPC server assembly, middl
 
 ### `bootstrap.go`
 
-- **Purpose:** Root `Build()` and HTTP router assembly with middleware stack.
+- **Purpose:** Root `Build()` and HTTP router assembly with middleware and auth stack.
 - **Layer / role:** Composition root.
 - **Key types / functions:**
   - `Build(ctx, cfg)` — wires infra, sample, healthcheck, lifecycle; returns `*Container`
-  - `(c *Container) HTTPRouter()` — builds chi router with domain transports
+  - `(c *Container) HTTPRouter()` — builds chi router with domain transports, auth, protected metrics
   - `(c *Container) middlewares()` — ordered middleware list
 - **Dependencies:** `internal/app/router`, `internal/app/middleware`, `internal/config`
 - **Used by:** All `cmd/*` entrypoints except migrate (indirectly via shared config)
-- **Patterns:** Manual DI composition root
-- **Notes:** Middleware order: Recoverer → RequestID → Logging → Metrics → Tracing.
+- **Patterns:** Manual DI composition root; `SkipPaths` for public health routes
+- **Notes:** Middleware order: Recoverer → RequestID → Logging → Metrics → Tracing. Sample routes wrapped with `APIKeyAuth` when secret is set.
 
 ### `container.go`
 
@@ -48,11 +48,11 @@ Bootstrap (manual DI), HTTP router, server wrappers, gRPC server assembly, middl
 - **Layer / role:** Domain module wiring.
 - **Key types / functions:**
   - `Sample` — holds `HTTP`, `GRPC`, `WS` handlers
-  - `wireSample(infra)` — constructs persistence adapters and handlers
-- **Dependencies:** `domain/sample/handler`, `domain/sample/usecase`, `infrastructure/persistence/sample`
+  - `wireSample(infra)` — constructs persistence adapters, telemetry ports, and handlers
+- **Dependencies:** `domain/sample/handler`, `domain/sample/usecase`, `infrastructure/persistence/sample`, `infrastructure/telemetry`, `infrastructure/websocket`
 - **Used by:** `bootstrap.Build`
-- **Patterns:** Repository → usecase → handler wiring per domain
-- **Notes:** Does not wire Kafka publisher or outbox (worker-only via `WireWorker`).
+- **Patterns:** Repository → usecase (with ports) → handler wiring per domain
+- **Notes:** Does not wire Kafka publisher or outbox (worker-only via `WireWorker`). WS hub exposed via `websocket.PortsAdapter`.
 
 ### `healthcheck.go`
 
@@ -60,23 +60,23 @@ Bootstrap (manual DI), HTTP router, server wrappers, gRPC server assembly, middl
 - **Layer / role:** Domain module wiring.
 - **Key types / functions:**
   - `Healthcheck` — `HTTP`, `GRPC`, `WS` handlers
-  - `wireHealthcheck(infra)` — injects `PostgresPing`, `RedisPing`, `MongoPing`, `GRPCPing`
-- **Dependencies:** `domain/healthcheck/adapter`, `handler`, `usecase`
+  - `wireHealthcheck(infra)` — injects `infrahealth.PostgresPing`, `RedisPing`, `MongoPing`, `GRPCPing`
+- **Dependencies:** `infrastructure/healthcheck`, `domain/healthcheck/handler`, `domain/healthcheck/usecase`, `infrastructure/telemetry`
 - **Used by:** `bootstrap.Build`
-- **Patterns:** Adapter structs satisfy checker ports
-- **Notes:** `GRPCPing` receives optional upstream client from infra.
+- **Patterns:** Infrastructure ping adapters satisfy checker ports
+- **Notes:** `GRPCPing` receives optional upstream client from infra. Ping adapters moved out of domain package.
 
 ### `worker.go`
 
-- **Purpose:** Wires outbox relay and Kafka consumer for the worker process.
+- **Purpose:** Wires outbox relay, idempotent Kafka consumer, and DLQ producer for the worker process.
 - **Layer / role:** Worker composition.
 - **Key types / functions:**
-  - `Worker` — `OutboxRelay`, `Consumer`
-  - `WireWorker(infra, cfg)` — publisher + event handler + relay + consumer
+  - `Worker` — `OutboxRelay`, `Consumer`, `DLQProducer`
+  - `WireWorker(infra, cfg)` — publisher + idempotency store + event handler + relay + consumer
 - **Dependencies:** `infrastructure/outbox`, `infrastructure/messaging/sample`, `infrastructure/kafka`
 - **Used by:** `cmd/worker/main.go`
 - **Patterns:** Separate worker wiring from API graph
-- **Notes:** Consumer handler is `samplemsg.EventHandler.Handle`.
+- **Notes:** Consumer uses `samplemsg.IsPoisonError` for DLQ routing.
 
 ### `lifecycle.go`
 
@@ -87,7 +87,7 @@ Bootstrap (manual DI), HTTP router, server wrappers, gRPC server assembly, middl
 - **Dependencies:** `internal/app/lifecycle`
 - **Used by:** `bootstrap.Build`
 - **Patterns:** LIFO shutdown hook registration
-- **Notes:** HTTP/gRPC shutdown hooks are added in `cmd/api` / `cmd/grpc` after `Build`, so they run before these infra hooks. Registration order here: Kafka → Mongo → Redis → Postgres → gRPC client → APM.
+- **Notes:** HTTP/gRPC shutdown hooks are added in `cmd/api` / `cmd/grpc` after `Build`, so they run before these infra hooks. Worker adds relay/consumer/DLQ hooks before `Wait`.
 
 ---
 
@@ -95,15 +95,15 @@ Bootstrap (manual DI), HTTP router, server wrappers, gRPC server assembly, middl
 
 ### `router/router.go`
 
-- **Purpose:** Chi HTTP router: root health JSON, Prometheus metrics, `/api/v1` domain routes.
+- **Purpose:** Chi HTTP router: root health JSON, protected Prometheus metrics, `/api/v1` domain routes with auth.
 - **Layer / role:** HTTP routing assembly.
 - **Key types / functions:**
-  - `Dependencies` — sample/health handlers, middlewares, metrics path
-  - `New(deps)` — chi router with RealIP, RequestID, custom middlewares, domain `RegisterHTTP` / `RegisterWebSocket`
-- **Dependencies:** Domain transport packages, `infrastructure/metrics`, chi middleware
+  - `Dependencies` — sample/health handlers, middlewares, metrics path, `MetricsAuth`, `APIAuth`
+  - `New(deps)` — chi router with RealIP, custom middlewares, public health routes, protected sample routes
+- **Dependencies:** Domain transport packages, `infrastructure/metrics`, chi
 - **Used by:** `Container.HTTPRouter()`
-- **Patterns:** Transport packages register routes; router only aggregates
-- **Notes:** Default metrics path `/metrics` if `MetricsPath` empty. Root `GET /` returns `{"service":"clean-template"}`.
+- **Patterns:** Transport packages register routes; router aggregates auth boundaries
+- **Notes:** Does **not** use chi's built-in `RequestID` (custom middleware only). Default metrics path `/metrics` if `MetricsPath` empty. Root `GET /` returns `{"service":"clean-template"}`.
 
 ### `server/server.go`
 
@@ -131,19 +131,33 @@ Bootstrap (manual DI), HTTP router, server wrappers, gRPC server assembly, middl
 
 ### `middleware/middleware.go`
 
-- **Purpose:** HTTP middleware: request ID, logging, recovery, Prometheus metrics, OpenTelemetry tracing.
+- **Purpose:** HTTP middleware: request ID, logging, recovery, Prometheus metrics (route patterns), OpenTelemetry tracing.
 - **Layer / role:** HTTP cross-cutting concerns.
 - **Key types / functions:**
   - `RequestID` — reads or generates `X-Request-ID`, stores in context
   - `Logging(base)` — per-request slog with latency and status
   - `Recoverer(base)` — panic recovery → 500
-  - `Metrics` — Prometheus HTTP counters and histograms
+  - `Metrics` — Prometheus HTTP counters and histograms labeled by chi route pattern
   - `Tracing(serviceName)` — OTel span per request
+  - `routePattern(r)` — resolves chi `RoutePattern()` to avoid UUID cardinality
   - `statusWriter` — captures response status for metrics/logging
-- **Dependencies:** `pkg/helper`, `pkg/constant`, `infrastructure/logger`, `infrastructure/metrics`, OpenTelemetry
+- **Dependencies:** `pkg/helper`, `pkg/constant`, `infrastructure/logger`, `infrastructure/metrics`, OpenTelemetry, chi
 - **Used by:** `bootstrap.middlewares()`
 - **Patterns:** Chi-compatible `func(http.Handler) http.Handler` middleware
 - **Notes:** Logging middleware attaches request-scoped logger to context via `logger.WithContext`.
+
+### `middleware/auth.go`
+
+- **Purpose:** API key authentication for protected routes and metrics.
+- **Layer / role:** HTTP security middleware.
+- **Key types / functions:**
+  - `APIKeyAuth(secret)` — validates `X-API-Key` header; bypassed when secret empty or `CHANGE_ME`
+  - `MetricsAuth(secret)` — alias for metrics endpoint protection
+  - `SkipPaths(prefixes, auth)` — bypass auth for health probe paths
+- **Dependencies:** `net/http`
+- **Used by:** `bootstrap.HTTPRouter()`
+- **Patterns:** Dev-friendly bypass for placeholder secrets
+- **Notes:** Returns 401 without valid key when auth is active.
 
 ### `lifecycle/lifecycle.go`
 

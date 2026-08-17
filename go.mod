@@ -3,6 +3,7 @@ module clean-template
 go 1.26.4
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/coder/websocket v1.8.15
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-playground/validator/v10 v10.30.3

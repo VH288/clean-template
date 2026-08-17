@@ -39,6 +39,14 @@ kafka:
     - 127.0.0.1:9092
   group_id: clean-template
   topic: sample.events
+  dlq_topic: sample.events.dlq
+  max_handler_retries: 3
+
+outbox:
+  poll_interval: 1s
+  batch_size: 50
+  max_retries: 5
+  processing_stale_after: 5m
 
 observability:
   log_level: info # debug | info | warn | error

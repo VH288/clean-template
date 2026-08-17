@@ -3,41 +3,49 @@ package usecase
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
+	"errors"
 
+	"clean-template/internal/domain/ports"
 	"clean-template/internal/domain/sample"
 	"clean-template/internal/domain/sample/entity"
 	"clean-template/internal/domain/sample/event"
-	"clean-template/internal/infrastructure/apm"
-	"clean-template/internal/infrastructure/logger"
-	"clean-template/internal/infrastructure/metrics"
 	apperrors "clean-template/internal/pkg/errors"
 	"clean-template/internal/pkg/utils"
+
+	"github.com/google/uuid"
 )
 
 type SampleUsecase struct {
 	repo     sample.Repository
 	cache    sample.CacheRepository
 	document sample.DocumentRepository
+	log      ports.Logger
+	trace    ports.Tracer
+	metrics  ports.SampleMetrics
 }
 
 func New(
 	repo sample.Repository,
 	cache sample.CacheRepository,
 	document sample.DocumentRepository,
+	log ports.Logger,
+	trace ports.Tracer,
+	metrics ports.SampleMetrics,
 ) *SampleUsecase {
 	return &SampleUsecase{
 		repo:     repo,
 		cache:    cache,
 		document: document,
+		log:      log,
+		trace:    trace,
+		metrics:  metrics,
 	}
 }
 
 func (u *SampleUsecase) Create(ctx context.Context, name, description, status string) (*entity.Sample, error) {
-	ctx, span := apm.Start(ctx, "sample.usecase.Create")
-	defer span.End()
+	ctx, end := u.trace.Start(ctx, "sample.usecase.Create")
+	defer end()
 
-	log := logger.FromContext(ctx)
 	if status == "" {
 		status = entity.StatusActive
 	}
@@ -48,72 +56,77 @@ func (u *SampleUsecase) Create(ctx context.Context, name, description, status st
 		Status:      status,
 	}
 
-	payload, err := marshalEvent(event.TypeCreated, s)
+	eventID := uuid.NewString()
+	payload, err := marshalEvent(eventID, event.TypeCreated, s)
 	if err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("create", "error").Inc()
+		u.metrics.IncOperation("create", "error")
 		return nil, apperrors.Wrap(err, apperrors.CodeInternal, "failed to build event")
 	}
 
-	if err := u.repo.CreateWithEvent(ctx, s, event.TypeCreated, payload); err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("create", "error").Inc()
+	if err := u.repo.CreateWithEvent(ctx, s, event.TypeCreated, eventID, payload); err != nil {
+		u.metrics.IncOperation("create", "error")
 		return nil, apperrors.Wrap(err, apperrors.CodeInternal, "failed to create sample")
 	}
 
-	// demo: direct multi-store write; not transactional with Postgres
 	if err := u.document.Upsert(ctx, s); err != nil {
-		log.Warn("mongo upsert failed after create", slog.String("id", s.ID), slog.String("error", err.Error()))
+		u.log.Warn(ctx, "mongo upsert failed after create", "id", s.ID, "error", err.Error())
+		u.metrics.IncMongoSyncFailure("create")
 	}
 	u.invalidateCache(ctx, s.ID)
 
-	metrics.SampleOperationsTotal.WithLabelValues("create", "success").Inc()
-	log.Info("sample created", slog.String("id", s.ID))
+	u.metrics.IncOperation("create", "success")
+	u.log.Info(ctx, "sample created", "id", s.ID)
 	return s, nil
 }
 
 func (u *SampleUsecase) GetByID(ctx context.Context, id string) (*entity.Sample, error) {
-	ctx, span := apm.Start(ctx, "sample.usecase.GetByID")
-	defer span.End()
+	ctx, end := u.trace.Start(ctx, "sample.usecase.GetByID")
+	defer end()
 
 	if cached, err := u.cache.Get(ctx, id); err == nil {
-		metrics.SampleOperationsTotal.WithLabelValues("get", "cache_hit").Inc()
+		u.metrics.IncOperation("get", "cache_hit")
 		return cached, nil
+	} else if !errors.Is(err, apperrors.ErrNotFound) {
+		u.log.Warn(ctx, "cache get failed", "id", id, "error", err.Error())
+		u.metrics.IncCacheOperation("get", "error")
 	}
 
 	s, err := u.repo.GetByID(ctx, id)
 	if err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("get", "error").Inc()
+		u.metrics.IncOperation("get", "error")
 		return nil, err
 	}
 
-	_ = u.cache.Set(ctx, s)
-	metrics.SampleOperationsTotal.WithLabelValues("get", "success").Inc()
+	if err := u.cache.Set(ctx, s); err != nil {
+		u.log.Warn(ctx, "cache set failed", "id", id, "error", err.Error())
+		u.metrics.IncCacheOperation("set", "error")
+	}
+	u.metrics.IncOperation("get", "success")
 	return s, nil
 }
 
 func (u *SampleUsecase) List(ctx context.Context, page, perPage int) ([]entity.Sample, int64, error) {
-	ctx, span := apm.Start(ctx, "sample.usecase.List")
-	defer span.End()
+	ctx, end := u.trace.Start(ctx, "sample.usecase.List")
+	defer end()
 
 	page, perPage, offset := utils.NormalizePagination(page, perPage)
 	items, total, err := u.repo.List(ctx, perPage, offset)
 	if err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("list", "error").Inc()
+		u.metrics.IncOperation("list", "error")
 		return nil, 0, apperrors.Wrap(err, apperrors.CodeInternal, "failed to list samples")
 	}
 
-	metrics.SampleOperationsTotal.WithLabelValues("list", "success").Inc()
+	u.metrics.IncOperation("list", "success")
 	return items, total, nil
 }
 
 func (u *SampleUsecase) Update(ctx context.Context, id, name, description, status string) (*entity.Sample, error) {
-	ctx, span := apm.Start(ctx, "sample.usecase.Update")
-	defer span.End()
-
-	log := logger.FromContext(ctx)
+	ctx, end := u.trace.Start(ctx, "sample.usecase.Update")
+	defer end()
 
 	existing, err := u.repo.GetByID(ctx, id)
 	if err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("update", "error").Inc()
+		u.metrics.IncOperation("update", "error")
 		return nil, err
 	}
 
@@ -121,70 +134,73 @@ func (u *SampleUsecase) Update(ctx context.Context, id, name, description, statu
 	existing.Description = description
 	existing.Status = status
 
-	payload, err := marshalEvent(event.TypeUpdated, existing)
+	eventID := uuid.NewString()
+	payload, err := marshalEvent(eventID, event.TypeUpdated, existing)
 	if err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("update", "error").Inc()
+		u.metrics.IncOperation("update", "error")
 		return nil, apperrors.Wrap(err, apperrors.CodeInternal, "failed to build event")
 	}
 
-	if err := u.repo.UpdateWithEvent(ctx, existing, event.TypeUpdated, payload); err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("update", "error").Inc()
+	if err := u.repo.UpdateWithEvent(ctx, existing, event.TypeUpdated, eventID, payload); err != nil {
+		u.metrics.IncOperation("update", "error")
+		if errors.Is(err, apperrors.ErrConflict) {
+			return nil, err
+		}
 		return nil, apperrors.Wrap(err, apperrors.CodeInternal, "failed to update sample")
 	}
 
-	// demo: direct multi-store write; not transactional with Postgres
 	if err := u.document.Upsert(ctx, existing); err != nil {
-		log.Warn("mongo upsert failed after update", slog.String("id", existing.ID), slog.String("error", err.Error()))
+		u.log.Warn(ctx, "mongo upsert failed after update", "id", existing.ID, "error", err.Error())
+		u.metrics.IncMongoSyncFailure("update")
 	}
 	u.invalidateCache(ctx, existing.ID)
 
-	metrics.SampleOperationsTotal.WithLabelValues("update", "success").Inc()
-	log.Info("sample updated", slog.String("id", existing.ID))
+	u.metrics.IncOperation("update", "success")
+	u.log.Info(ctx, "sample updated", "id", existing.ID)
 	return existing, nil
 }
 
 func (u *SampleUsecase) Delete(ctx context.Context, id string) error {
-	ctx, span := apm.Start(ctx, "sample.usecase.Delete")
-	defer span.End()
-
-	log := logger.FromContext(ctx)
+	ctx, end := u.trace.Start(ctx, "sample.usecase.Delete")
+	defer end()
 
 	existing, err := u.repo.GetByID(ctx, id)
 	if err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("delete", "error").Inc()
+		u.metrics.IncOperation("delete", "error")
 		return err
 	}
 
-	payload, err := marshalEvent(event.TypeDeleted, existing)
+	eventID := uuid.NewString()
+	payload, err := marshalEvent(eventID, event.TypeDeleted, existing)
 	if err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("delete", "error").Inc()
+		u.metrics.IncOperation("delete", "error")
 		return apperrors.Wrap(err, apperrors.CodeInternal, "failed to build event")
 	}
 
-	if err := u.repo.DeleteWithEvent(ctx, id, event.TypeDeleted, payload); err != nil {
-		metrics.SampleOperationsTotal.WithLabelValues("delete", "error").Inc()
+	if err := u.repo.DeleteWithEvent(ctx, id, event.TypeDeleted, eventID, payload); err != nil {
+		u.metrics.IncOperation("delete", "error")
 		return apperrors.Wrap(err, apperrors.CodeInternal, "failed to delete sample")
 	}
 
-	// demo: direct multi-store write; not transactional with Postgres
 	if err := u.document.Delete(ctx, id); err != nil {
-		log.Warn("mongo delete failed after delete", slog.String("id", id), slog.String("error", err.Error()))
+		u.log.Warn(ctx, "mongo delete failed after delete", "id", id, "error", err.Error())
+		u.metrics.IncMongoSyncFailure("delete")
 	}
 	u.invalidateCache(ctx, id)
 
-	metrics.SampleOperationsTotal.WithLabelValues("delete", "success").Inc()
-	log.Info("sample deleted", slog.String("id", id))
+	u.metrics.IncOperation("delete", "success")
+	u.log.Info(ctx, "sample deleted", "id", id)
 	return nil
 }
 
-func marshalEvent(eventType string, s *entity.Sample) ([]byte, error) {
-	return json.Marshal(event.Envelope{Type: eventType, Sample: s})
+func marshalEvent(eventID, eventType string, s *entity.Sample) ([]byte, error) {
+	return json.Marshal(event.Envelope{EventID: eventID, Type: eventType, Sample: s})
 }
 
 func (u *SampleUsecase) invalidateCache(ctx context.Context, id string) {
 	if err := u.cache.Delete(ctx, id); err != nil {
-		metrics.CacheInvalidateTotal.WithLabelValues("error").Inc()
+		u.metrics.IncCacheInvalidate("error")
 		return
 	}
-	metrics.CacheInvalidateTotal.WithLabelValues("success").Inc()
+	u.metrics.IncCacheInvalidate("success")
 }

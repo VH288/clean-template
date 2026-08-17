@@ -9,7 +9,8 @@ const (
 	SampleCacheKeyPrefix = "sample:"
 	SampleCacheTTLSec    = 300
 
-	KafkaTopicSampleEvents = "sample.events"
+	KafkaTopicSampleEvents    = "sample.events"
+	KafkaTopicSampleEventsDLQ = "sample.events.dlq"
 
 	HealthStatusUP   = "UP"
 	HealthStatusDOWN = "DOWN"

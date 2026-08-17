@@ -1,6 +1,6 @@
 # Root Files and Tooling
 
-Makefile, Docker image, code generation script, module definition, and git ignore rules.
+Makefile, Docker image, CI workflow, code generation script, module definition, and git ignore rules.
 
 ---
 
@@ -18,11 +18,24 @@ Makefile, Docker image, code generation script, module definition, and git ignor
   - `test-unit` — domain, pkg, infrastructure with `-short`
   - `test-integration` — `-tags=integration`, `Integration` test name filter
   - `tidy` — `go mod tidy`
-  - `build` — binaries to `bin/` (api, grpc, worker, migrate)
+  - `build` — binaries to `bin/` (api, grpc, worker, migrate, outbox-replay)
   - `lint` — `go vet ./...`
   - `docker-up`, `docker-down` — referenced in help (compose in `deployments/` when present)
 - **Variables:** `APP_NAME`, `CONFIG`, `GO`, `PROTOC`
 - **Notes:** Integration tests expect `DATABASE_URL` for Postgres. Proto target requires `protoc` and Go grpc plugins.
+
+---
+
+## `.github/workflows/ci.yml`
+
+- **Purpose:** Continuous integration on push/PR to `master`, `clean`, `main`.
+- **Jobs:**
+  - **test** — Postgres 16 service container
+    - `make test-unit`
+    - `make lint` (`go vet`)
+    - `make migrate-up` + `make test-integration` with `DATABASE_URL`
+- **Dependencies:** GitHub Actions, `actions/setup-go`, `actions/checkout`
+- **Notes:** Ensures migrations apply cleanly and integration tests pass against real Postgres.
 
 ---
 
@@ -35,7 +48,7 @@ Makefile, Docker image, code generation script, module definition, and git ignor
 - **Exposed ports:** `8081` (HTTP), `7000` (gRPC)
 - **User:** `nobody`
 - **Default entrypoint:** `/app/api`
-- **Notes:** Does not build `grpc`-only binary. Includes `curl` and CA certificates. Worker/migrate available at `/app/worker`, `/app/migrate`.
+- **Notes:** Does not build `grpc`-only or `outbox-replay` binaries. Includes `curl` and CA certificates. Worker/migrate available at `/app/worker`, `/app/migrate`.
 
 ---
 
@@ -60,7 +73,7 @@ Makefile, Docker image, code generation script, module definition, and git ignor
   | `jmoiron/sqlx` + `lib/pq` | Postgres access |
   | `redis/go-redis` | Redis cache |
   | `mongo-driver` | MongoDB documents |
-  | `segmentio/kafka-go` | Kafka producer/consumer |
+  | `segmentio/kafka-go` | Kafka producer/consumer/DLQ |
   | `google.golang.org/grpc` + `protobuf` | gRPC services |
   | `coder/websocket` | WebSocket server |
   | `spf13/viper` | Configuration |
@@ -69,6 +82,7 @@ Makefile, Docker image, code generation script, module definition, and git ignor
   | `go.opentelemetry.io/otel` (+ OTLP exporter) | Tracing to Tempo |
   | `go-playground/validator` | Request validation |
   | `stretchr/testify` | Tests |
+  | `DATA-DOG/go-sqlmock` | Outbox relay unit tests |
 
 ---
 

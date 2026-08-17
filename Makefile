@@ -60,6 +60,7 @@ build:
 	$(GO) build -o bin/grpc ./cmd/grpc
 	$(GO) build -o bin/worker ./cmd/worker
 	$(GO) build -o bin/migrate ./cmd/migrate
+	$(GO) build -o bin/outbox-replay ./cmd/outbox-replay
 
 lint:
 	$(GO) vet ./...

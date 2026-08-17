@@ -19,6 +19,7 @@ type postgresModel struct {
 	Name        string    `db:"name"`
 	Description string    `db:"description"`
 	Status      string    `db:"status"`
+	Version     int       `db:"version"`
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
 }
@@ -29,6 +30,7 @@ func toModel(s *entity.Sample) postgresModel {
 		Name:        s.Name,
 		Description: s.Description,
 		Status:      s.Status,
+		Version:     s.Version,
 		CreatedAt:   s.CreatedAt,
 		UpdatedAt:   s.UpdatedAt,
 	}
@@ -40,6 +42,7 @@ func fromModel(m postgresModel) *entity.Sample {
 		Name:        m.Name,
 		Description: m.Description,
 		Status:      m.Status,
+		Version:     m.Version,
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,
 	}
@@ -54,16 +57,19 @@ func NewPostgresRepository(db *sqlx.DB) *PostgresRepository {
 }
 
 func (r *PostgresRepository) Create(ctx context.Context, sample *entity.Sample) error {
-	return r.CreateWithEvent(ctx, sample, "", nil)
+	return r.CreateWithEvent(ctx, sample, "", "", nil)
 }
 
-func (r *PostgresRepository) CreateWithEvent(ctx context.Context, sample *entity.Sample, eventType string, eventPayload []byte) error {
+func (r *PostgresRepository) CreateWithEvent(ctx context.Context, sample *entity.Sample, eventType, eventID string, eventPayload []byte) error {
 	if sample.ID == "" {
 		sample.ID = uuid.NewString()
 	}
 	now := time.Now().UTC()
 	sample.CreatedAt = now
 	sample.UpdatedAt = now
+	if sample.Version == 0 {
+		sample.Version = 1
+	}
 
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -72,15 +78,15 @@ func (r *PostgresRepository) CreateWithEvent(ctx context.Context, sample *entity
 	defer func() { _ = tx.Rollback() }()
 
 	const q = `
-		INSERT INTO samples (id, name, description, status, created_at, updated_at)
-		VALUES (:id, :name, :description, :status, :created_at, :updated_at)
+		INSERT INTO samples (id, name, description, status, version, created_at, updated_at)
+		VALUES (:id, :name, :description, :status, :version, :created_at, :updated_at)
 	`
 	if _, err := tx.NamedExecContext(ctx, q, toModel(sample)); err != nil {
 		return fmt.Errorf("insert sample: %w", err)
 	}
 
 	if eventType != "" {
-		if err := insertOutboxEvent(ctx, tx, sample.ID, eventType, eventPayload); err != nil {
+		if err := insertOutboxEvent(ctx, tx, eventID, sample.ID, eventType, eventPayload); err != nil {
 			return err
 		}
 	}
@@ -94,7 +100,7 @@ func (r *PostgresRepository) CreateWithEvent(ctx context.Context, sample *entity
 func (r *PostgresRepository) GetByID(ctx context.Context, id string) (*entity.Sample, error) {
 	var model postgresModel
 	const q = `
-		SELECT id, name, description, status, created_at, updated_at
+		SELECT id, name, description, status, version, created_at, updated_at
 		FROM samples WHERE id = $1
 	`
 	if err := r.db.GetContext(ctx, &model, q, id); err != nil {
@@ -114,7 +120,7 @@ func (r *PostgresRepository) List(ctx context.Context, limit, offset int) ([]ent
 
 	var models []postgresModel
 	const q = `
-		SELECT id, name, description, status, created_at, updated_at
+		SELECT id, name, description, status, version, created_at, updated_at
 		FROM samples
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -131,11 +137,13 @@ func (r *PostgresRepository) List(ctx context.Context, limit, offset int) ([]ent
 }
 
 func (r *PostgresRepository) Update(ctx context.Context, sample *entity.Sample) error {
-	return r.UpdateWithEvent(ctx, sample, "", nil)
+	return r.UpdateWithEvent(ctx, sample, "", "", nil)
 }
 
-func (r *PostgresRepository) UpdateWithEvent(ctx context.Context, sample *entity.Sample, eventType string, eventPayload []byte) error {
+func (r *PostgresRepository) UpdateWithEvent(ctx context.Context, sample *entity.Sample, eventType, eventID string, eventPayload []byte) error {
+	expectedVersion := sample.Version
 	sample.UpdatedAt = time.Now().UTC()
+	sample.Version = expectedVersion + 1
 
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -145,10 +153,20 @@ func (r *PostgresRepository) UpdateWithEvent(ctx context.Context, sample *entity
 
 	const q = `
 		UPDATE samples
-		SET name = :name, description = :description, status = :status, updated_at = :updated_at
-		WHERE id = :id
+		SET name = :name, description = :description, status = :status,
+		    updated_at = :updated_at, version = :version
+		WHERE id = :id AND version = :expected_version
 	`
-	res, err := tx.NamedExecContext(ctx, q, toModel(sample))
+	args := map[string]any{
+		"id":               sample.ID,
+		"name":             sample.Name,
+		"description":      sample.Description,
+		"status":           sample.Status,
+		"updated_at":       sample.UpdatedAt,
+		"version":          sample.Version,
+		"expected_version": expectedVersion,
+	}
+	res, err := tx.NamedExecContext(ctx, q, args)
 	if err != nil {
 		return fmt.Errorf("update sample: %w", err)
 	}
@@ -157,11 +175,18 @@ func (r *PostgresRepository) UpdateWithEvent(ctx context.Context, sample *entity
 		return err
 	}
 	if affected == 0 {
-		return apperrors.ErrNotFound
+		exists, err := r.existsByID(ctx, tx, sample.ID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return apperrors.ErrNotFound
+		}
+		return apperrors.ErrConflict
 	}
 
 	if eventType != "" {
-		if err := insertOutboxEvent(ctx, tx, sample.ID, eventType, eventPayload); err != nil {
+		if err := insertOutboxEvent(ctx, tx, eventID, sample.ID, eventType, eventPayload); err != nil {
 			return err
 		}
 	}
@@ -173,10 +198,10 @@ func (r *PostgresRepository) UpdateWithEvent(ctx context.Context, sample *entity
 }
 
 func (r *PostgresRepository) Delete(ctx context.Context, id string) error {
-	return r.DeleteWithEvent(ctx, id, "", nil)
+	return r.DeleteWithEvent(ctx, id, "", "", nil)
 }
 
-func (r *PostgresRepository) DeleteWithEvent(ctx context.Context, id, eventType string, eventPayload []byte) error {
+func (r *PostgresRepository) DeleteWithEvent(ctx context.Context, id, eventType, eventID string, eventPayload []byte) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -196,7 +221,7 @@ func (r *PostgresRepository) DeleteWithEvent(ctx context.Context, id, eventType 
 	}
 
 	if eventType != "" {
-		if err := insertOutboxEvent(ctx, tx, id, eventType, eventPayload); err != nil {
+		if err := insertOutboxEvent(ctx, tx, eventID, id, eventType, eventPayload); err != nil {
 			return err
 		}
 	}
@@ -207,12 +232,23 @@ func (r *PostgresRepository) DeleteWithEvent(ctx context.Context, id, eventType 
 	return nil
 }
 
-func insertOutboxEvent(ctx context.Context, tx *sqlx.Tx, aggregateID, eventType string, payload []byte) error {
+func (r *PostgresRepository) existsByID(ctx context.Context, tx *sqlx.Tx, id string) (bool, error) {
+	var exists bool
+	if err := tx.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM samples WHERE id = $1)`, id); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func insertOutboxEvent(ctx context.Context, tx *sqlx.Tx, eventID, aggregateID, eventType string, payload []byte) error {
+	if eventID == "" {
+		eventID = uuid.NewString()
+	}
 	const q = `
 		INSERT INTO outbox_events (id, aggregate_type, aggregate_id, event_type, payload, status)
 		VALUES ($1, $2, $3, $4, $5, 'pending')
 	`
-	_, err := tx.ExecContext(ctx, q, uuid.NewString(), "sample", aggregateID, eventType, payload)
+	_, err := tx.ExecContext(ctx, q, eventID, "sample", aggregateID, eventType, payload)
 	if err != nil {
 		return fmt.Errorf("insert outbox event: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"clean-template/internal/pkg/constant"
 	"clean-template/internal/pkg/helper"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -83,10 +84,19 @@ func Metrics(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
 
-		path := r.URL.Path
+		path := routePattern(r)
 		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(sw.status)).Inc()
 		metrics.HTTPRequestDuration.WithLabelValues(r.Method, path).Observe(time.Since(start).Seconds())
 	})
+}
+
+func routePattern(r *http.Request) string {
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		if pattern := rc.RoutePattern(); pattern != "" {
+			return pattern
+		}
+	}
+	return r.URL.Path
 }
 
 func Tracing(serviceName string) func(http.Handler) http.Handler {

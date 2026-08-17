@@ -1,8 +1,9 @@
-package adapter
+package healthcheck
 
 import (
 	"context"
 
+	"clean-template/internal/domain/healthcheck"
 	"clean-template/internal/infrastructure/database"
 	grpcclient "clean-template/internal/infrastructure/grpc"
 	"clean-template/internal/infrastructure/mongodb"
@@ -38,3 +39,10 @@ func (g GRPCPing) CheckHealth(ctx context.Context, service string) error {
 	}
 	return g.Client.CheckHealth(ctx, service)
 }
+
+var (
+	_ healthcheck.PostgresChecker = PostgresPing{}
+	_ healthcheck.RedisChecker    = RedisPing{}
+	_ healthcheck.MongoChecker    = MongoPing{}
+	_ healthcheck.GRPCChecker     = GRPCPing{}
+)

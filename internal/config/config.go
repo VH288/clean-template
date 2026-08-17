@@ -73,15 +73,18 @@ type MongoConfig struct {
 }
 
 type KafkaConfig struct {
-	Brokers []string `mapstructure:"brokers"`
-	GroupID string   `mapstructure:"group_id"`
-	Topic   string   `mapstructure:"topic"`
+	Brokers           []string `mapstructure:"brokers"`
+	GroupID           string   `mapstructure:"group_id"`
+	Topic             string   `mapstructure:"topic"`
+	DLQTopic          string   `mapstructure:"dlq_topic"`
+	MaxHandlerRetries int      `mapstructure:"max_handler_retries"`
 }
 
 type OutboxConfig struct {
-	PollInterval time.Duration `mapstructure:"poll_interval"`
-	BatchSize    int           `mapstructure:"batch_size"`
-	MaxRetries   int           `mapstructure:"max_retries"`
+	PollInterval         time.Duration `mapstructure:"poll_interval"`
+	BatchSize            int           `mapstructure:"batch_size"`
+	MaxRetries           int           `mapstructure:"max_retries"`
+	ProcessingStaleAfter time.Duration `mapstructure:"processing_stale_after"`
 }
 
 type ObservabilityConfig struct {
@@ -163,9 +166,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("kafka.brokers", []string{"127.0.0.1:9092"})
 	v.SetDefault("kafka.group_id", "clean-template")
 	v.SetDefault("kafka.topic", "sample.events")
+	v.SetDefault("kafka.dlq_topic", "sample.events.dlq")
+	v.SetDefault("kafka.max_handler_retries", 3)
 	v.SetDefault("outbox.poll_interval", "1s")
 	v.SetDefault("outbox.batch_size", 50)
 	v.SetDefault("outbox.max_retries", 5)
+	v.SetDefault("outbox.processing_stale_after", "5m")
 	v.SetDefault("observability.log_level", "info")
 	v.SetDefault("observability.loki_url", "http://127.0.0.1:3100")
 	v.SetDefault("observability.tempo_endpoint", "127.0.0.1:4317")

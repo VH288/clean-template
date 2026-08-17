@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"clean-template/internal/domain/healthcheck"
-	infraws "clean-template/internal/infrastructure/websocket"
+	"clean-template/internal/domain/ports"
 	"clean-template/internal/pkg/constant"
 	"clean-template/internal/pkg/formatter"
 	healthv1 "clean-template/internal/proto/healthcheck/v1"
@@ -53,10 +53,10 @@ func (h *GRPCHandler) Check(ctx context.Context, _ *healthv1.CheckRequest) (*hea
 
 type WSHandler struct {
 	usecase healthcheck.Usecase
-	hub     *infraws.Hub
+	hub     ports.WebSocketHub
 }
 
-func NewWSHandler(usecase healthcheck.Usecase, hub *infraws.Hub) *WSHandler {
+func NewWSHandler(usecase healthcheck.Usecase, hub ports.WebSocketHub) *WSHandler {
 	return &WSHandler{usecase: usecase, hub: hub}
 }
 
@@ -69,7 +69,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	for {
-		_, data, err := conn.Read(ctx)
+		data, err := conn.Read(ctx)
 		if err != nil {
 			return
 		}
@@ -83,7 +83,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		report := h.usecase.CheckWebSocket(ctx)
-		_ = infraws.WriteJSON(ctx, conn, map[string]any{
+		_ = h.hub.WriteJSON(ctx, conn, map[string]any{
 			"action": msg.Action,
 			"data":   report,
 		})

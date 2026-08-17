@@ -25,12 +25,12 @@ Goose SQL migrations for Postgres. Applied via `cmd/migrate` or Makefile targets
 
 - **Purpose:** Transactional outbox table for reliable Kafka publish.
 - **Schema:**
-  - `id` UUID PRIMARY KEY
+  - `id` UUID PRIMARY KEY (same as `event_id` in envelope)
   - `aggregate_type` VARCHAR(50) NOT NULL
   - `aggregate_id` UUID NOT NULL
   - `event_type` VARCHAR(100) NOT NULL
   - `payload` JSONB NOT NULL
-  - `status` VARCHAR(20) NOT NULL DEFAULT `'pending'`
+  - `status` VARCHAR(20) NOT NULL DEFAULT `'pending'` (`pending` | `processing` | `published` | `failed`)
   - `retry_count` INT NOT NULL DEFAULT 0
   - `created_at` TIMESTAMPTZ NOT NULL DEFAULT NOW()
   - `published_at` TIMESTAMPTZ nullable
@@ -39,6 +39,34 @@ Goose SQL migrations for Postgres. Applied via `cmd/migrate` or Makefile targets
 - **Up:** `CREATE TABLE` + partial index
 - **Down:** Drop index and table
 - **Notes:** See [ADR 001](../adr/001-transactional-outbox.md) and [outbox relay](../layers/infrastructure.md#internalinfrastructureoutboxrelaygo).
+
+---
+
+### `00003_version_and_outbox_claimed.sql`
+
+- **Purpose:** Optimistic locking on samples; outbox claim tracking for two-phase relay.
+- **Schema changes:**
+  - `samples.version` INT NOT NULL DEFAULT 1
+  - `outbox_events.claimed_at` TIMESTAMPTZ nullable
+- **Indexes:**
+  - Partial `idx_outbox_processing` on `(status, claimed_at)` WHERE `status = 'processing'`
+- **Up:** `ALTER TABLE` + index
+- **Down:** Drop index and columns
+- **Notes:** `version` used in `UPDATE … WHERE id = $1 AND version = $expected`. Stale `processing` rows reclaimed when `claimed_at` older than `outbox.processing_stale_after`.
+
+---
+
+### `00004_processed_events.sql`
+
+- **Purpose:** Idempotency store for Kafka consumer at-least-once delivery.
+- **Schema:**
+  - `event_id` UUID PRIMARY KEY
+  - `processed_at` TIMESTAMPTZ NOT NULL DEFAULT NOW()
+- **Indexes:**
+  - `idx_processed_events_processed_at` on `processed_at`
+- **Up:** `CREATE TABLE` + index
+- **Down:** Drop index and table
+- **Notes:** Consumer checks before dispatch; `ON CONFLICT DO NOTHING` on insert.
 
 ---
 
@@ -61,3 +89,4 @@ Docker image copies `migrations/` to `/app/migrations` for containerized migrate
 
 - [cmd/migrate](../layers/cmd.md#cmdmigratemaingo)
 - [Postgres repository](../layers/infrastructure.md#internalinfrastructurepersistencesamplepostgresgo)
+- [Consumer idempotency](../layers/infrastructure.md#internalinfrastructuremessagingsampleidempotencygo)

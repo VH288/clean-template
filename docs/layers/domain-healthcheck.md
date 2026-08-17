@@ -14,25 +14,9 @@ Aggregates dependency health checks across HTTP (Postgres + Redis), gRPC (upstre
   - `PostgresChecker`, `RedisChecker`, `MongoChecker`, `GRPCChecker` — small ping ports
   - `Usecase` — `CheckHTTP`, `CheckGRPC`, `CheckWebSocket`
 - **Dependencies:** None
-- **Used by:** Usecase, adapters, handlers
+- **Used by:** Usecase, handlers, infrastructure ping adapters
 - **Patterns:** Interface segregation per dependency type
-- **Notes:** Status values use `constant.HealthStatusUP` / `HealthStatusDOWN`.
-
----
-
-### `adapter/ping.go`
-
-- **Purpose:** Thin adapters wrapping infrastructure clients to satisfy checker ports.
-- **Layer / role:** Domain adapter (infrastructure bridge).
-- **Key types / functions:**
-  - `PostgresPing` — `Ping(ctx)` via `database.Ping`
-  - `RedisPing` — `Ping(ctx)` via `redis.Ping`
-  - `MongoPing` — `Ping(ctx)` via `mongodb.Client.Ping`
-  - `GRPCPing` — `CheckHealth(ctx, service)` via gRPC health client; nil client → success
-- **Dependencies:** `infrastructure/database`, `redis`, `mongodb`, `grpc` packages
-- **Used by:** `bootstrap.wireHealthcheck`
-- **Patterns:** Adapter structs with embedded infra clients
-- **Notes:** `GRPCPing` returns nil when client is nil (upstream optional). Uses standard `grpc.health.v1` probe.
+- **Notes:** Status values use `constant.HealthStatusUP` / `HealthStatusDOWN`. HTTP/WS health routes are public (no API key).
 
 ---
 
@@ -41,15 +25,15 @@ Aggregates dependency health checks across HTTP (Postgres + Redis), gRPC (upstre
 - **Purpose:** Runs dependency checks per transport context and assembles health reports with metrics.
 - **Layer / role:** Domain usecase.
 - **Key types / functions:**
-  - `HealthUsecase` — holds four checker ports
-  - `New(postgres, redis, mongo, grpc)` — constructor
+  - `HealthUsecase` — holds four checker ports + telemetry ports
+  - `New(postgres, redis, mongo, grpc, trace, metrics)` — constructor
   - `CheckHTTP` — Postgres + Redis
   - `CheckGRPC` — upstream gRPC health (empty service name)
   - `CheckWebSocket` — MongoDB ping
   - `check`, `assemble` — per-dependency check + aggregate UP/DOWN
-- **Dependencies:** `apm`, `metrics`, `pkg/constant`
+- **Dependencies:** `domain/ports` (Tracer, HealthMetrics), `pkg/constant`
 - **Used by:** HTTP, gRPC, WS handlers
-- **Patterns:** Transport-specific dependency subsets; gauge metrics per dependency
+- **Patterns:** Transport-specific dependency subsets; gauge metrics via `ports.HealthMetrics`
 - **Notes:** Overall status DOWN if any dependency in the report is DOWN.
 
 ---
@@ -61,8 +45,8 @@ Aggregates dependency health checks across HTTP (Postgres + Redis), gRPC (upstre
 - **Key types / functions:**
   - `HTTPHandler.Check` — returns 200 or 503 with `formatter.Success`
   - `GRPCHandler.Check` — maps `Report` to proto `CheckResponse`
-  - `WSHandler.ServeHTTP` — read loop; responds to any message (default action `ping`) with Mongo-backed check
-- **Dependencies:** `formatter`, `constant`, `websocket`, generated healthcheck proto
+  - `WSHandler.ServeHTTP` — read loop; responds to any message (default action `ping`) with Mongo-backed check; uses `ports.WebSocketHub`
+- **Dependencies:** `formatter`, `constant`, `domain/ports`, generated healthcheck proto
 - **Used by:** `transport/transport.go`
 - **Patterns:** Shared usecase across transports; HTTP maps DOWN → 503
 - **Notes:** gRPC healthcheck domain service is separate from `grpc.health.v1` server registered in `app/grpc/server.go`.
@@ -80,7 +64,22 @@ Aggregates dependency health checks across HTTP (Postgres + Redis), gRPC (upstre
 - **Dependencies:** `handler`, generated proto, chi, grpc
 - **Used by:** `router/router.go`, `app/grpc/server.go`
 - **Patterns:** Single transport file per domain
-- **Notes:** Full HTTP paths: `/api/v1/health`, `/api/v1/healthz`. WS: `/api/v1/ws/health`.
+- **Notes:** Full HTTP paths: `/api/v1/health`, `/api/v1/healthz`. WS: `/api/v1/ws/health`. Registered outside auth-protected route group.
+
+---
+
+## Infrastructure ping adapters
+
+Ping implementations live in `internal/infrastructure/healthcheck/ping.go` (not in the domain package):
+
+| Type | Port | Delegates to |
+|------|------|--------------|
+| `PostgresPing` | `PostgresChecker` | `database.Ping` |
+| `RedisPing` | `RedisChecker` | `redis.Ping` |
+| `MongoPing` | `MongoChecker` | `mongodb.Client.Ping` |
+| `GRPCPing` | `GRPCChecker` | `grpc.Client.CheckHealth` |
+
+Wired in `bootstrap.wireHealthcheck`. `GRPCPing` returns nil when client is nil (upstream optional).
 
 ---
 

@@ -1,6 +1,6 @@
 # Command Entrypoints (`cmd/`)
 
-Four binaries: combined API server, gRPC-only server, background worker, and database migrations.
+Five binaries: combined API server, gRPC-only server, background worker, database migrations, and outbox replay utility.
 
 ---
 
@@ -14,7 +14,7 @@ Four binaries: combined API server, gRPC-only server, background worker, and dat
 - **Dependencies:** `internal/config`, `internal/app/bootstrap`, `internal/app/server`, `internal/app/grpc`
 - **Used by:** `make run-api`, Docker default `ENTRYPOINT`
 - **Patterns:** Dual-server goroutine with error channel; shutdown hooks registered after `Build()` so HTTP/gRPC stop before infra cleanup
-- **Notes:** On server error, cancels root context to trigger shutdown. HTTP listens on `cfg.HTTP.Port`; gRPC on `cfg.GRPC.Port`.
+- **Notes:** On server error, cancels root context to trigger shutdown. HTTP listens on `cfg.HTTP.Port`; gRPC on `cfg.GRPC.Port`. Router applies API key auth on sample routes when `app.secret` is set.
 
 ---
 
@@ -40,7 +40,7 @@ Four binaries: combined API server, gRPC-only server, background worker, and dat
 - **Dependencies:** `internal/config`, `internal/app/bootstrap`
 - **Used by:** `make run-worker`
 - **Patterns:** Background worker process separate from API
-- **Notes:** Registers `worker.Consumer.Close` on lifecycle (runs first on shutdown, LIFO). Does not start HTTP/gRPC servers.
+- **Notes:** Shutdown hooks (LIFO): outbox relay `Stop()` → consumer `Close()` → DLQ producer `Close()` → infra hooks from `wireLifecycle`.
 
 ---
 
@@ -55,3 +55,16 @@ Four binaries: combined API server, gRPC-only server, background worker, and dat
 - **Used by:** `make migrate-up`, `make migrate-down`, `make migrate-status`
 - **Patterns:** Thin CLI over Goose
 - **Notes:** Flag `-dir` defaults to `migrations`. Commands: `up`, `down`, `status`, `reset`. Unknown commands exit with error. See [migrations.md](migrations.md).
+
+---
+
+### `cmd/outbox-replay/main.go`
+
+- **Purpose:** Resets all `failed` outbox rows to `pending` for manual recovery after fixing upstream issues.
+- **Layer / role:** Operational utility entrypoint.
+- **Key types / functions:**
+  - `run()` — builds container, calls `Relay.ReplayFailed(ctx)`, prints count
+- **Dependencies:** `internal/config`, `internal/app/bootstrap`, `infrastructure/outbox`, `infrastructure/messaging/sample`
+- **Used by:** `go run ./cmd/outbox-replay`, `make build` → `bin/outbox-replay`
+- **Patterns:** One-shot admin command
+- **Notes:** Safe to run while worker is running; relay will pick up reset rows on next poll.

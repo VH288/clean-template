@@ -7,6 +7,7 @@ import (
 
 	"clean-template/internal/domain/healthcheck"
 	"clean-template/internal/domain/healthcheck/usecase"
+	"clean-template/internal/infrastructure/telemetry"
 	"clean-template/internal/pkg/constant"
 	"clean-template/internal/pkg/testutil"
 
@@ -30,6 +31,8 @@ func TestHealthUsecase_CheckHTTP(t *testing.T) {
 		pingFunc(func(ctx context.Context) error { return nil }),
 		pingFunc(func(ctx context.Context) error { return nil }),
 		grpcFunc(func(ctx context.Context, service string) error { return nil }),
+		telemetry.NoopTracer{},
+		telemetry.NoopHealthMetrics{},
 	)
 
 	report := uc.CheckHTTP(ctx)
@@ -44,6 +47,8 @@ func TestHealthUsecase_CheckHTTP_Down(t *testing.T) {
 		pingFunc(func(ctx context.Context) error { return nil }),
 		pingFunc(func(ctx context.Context) error { return nil }),
 		grpcFunc(func(ctx context.Context, service string) error { return nil }),
+		telemetry.NoopTracer{},
+		telemetry.NoopHealthMetrics{},
 	)
 
 	report := uc.CheckHTTP(ctx)
@@ -57,6 +62,8 @@ func TestHealthUsecase_CheckGRPCAndWS(t *testing.T) {
 		pingFunc(func(ctx context.Context) error { return nil }),
 		pingFunc(func(ctx context.Context) error { return nil }),
 		grpcFunc(func(ctx context.Context, service string) error { return nil }),
+		telemetry.NoopTracer{},
+		telemetry.NoopHealthMetrics{},
 	)
 
 	require.Equal(t, constant.HealthStatusUP, uc.CheckGRPC(ctx).Status)

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"testing"
 
+	"clean-template/internal/domain/sample"
 	"clean-template/internal/domain/sample/entity"
 	"clean-template/internal/domain/sample/event"
 	"clean-template/internal/domain/sample/usecase"
+	"clean-template/internal/infrastructure/telemetry"
 	apperrors "clean-template/internal/pkg/errors"
 	"clean-template/internal/pkg/testutil"
 
@@ -24,12 +26,15 @@ func newMemRepo() *memRepo {
 }
 
 func (m *memRepo) Create(ctx context.Context, sample *entity.Sample) error {
-	return m.CreateWithEvent(ctx, sample, "", nil)
+	return m.CreateWithEvent(ctx, sample, "", "", nil)
 }
 
-func (m *memRepo) CreateWithEvent(ctx context.Context, sample *entity.Sample, eventType string, eventPayload []byte) error {
+func (m *memRepo) CreateWithEvent(ctx context.Context, sample *entity.Sample, eventType, eventID string, eventPayload []byte) error {
 	if sample.ID == "" {
 		sample.ID = "id-1"
+	}
+	if sample.Version == 0 {
+		sample.Version = 1
 	}
 	cp := *sample
 	m.items[sample.ID] = &cp
@@ -57,13 +62,14 @@ func (m *memRepo) List(ctx context.Context, limit, offset int) ([]entity.Sample,
 }
 
 func (m *memRepo) Update(ctx context.Context, sample *entity.Sample) error {
-	return m.UpdateWithEvent(ctx, sample, "", nil)
+	return m.UpdateWithEvent(ctx, sample, "", "", nil)
 }
 
-func (m *memRepo) UpdateWithEvent(ctx context.Context, sample *entity.Sample, eventType string, eventPayload []byte) error {
+func (m *memRepo) UpdateWithEvent(ctx context.Context, sample *entity.Sample, eventType, eventID string, eventPayload []byte) error {
 	if _, ok := m.items[sample.ID]; !ok {
 		return apperrors.ErrNotFound
 	}
+	sample.Version++
 	cp := *sample
 	m.items[sample.ID] = &cp
 	if eventType != "" {
@@ -73,10 +79,10 @@ func (m *memRepo) UpdateWithEvent(ctx context.Context, sample *entity.Sample, ev
 }
 
 func (m *memRepo) Delete(ctx context.Context, id string) error {
-	return m.DeleteWithEvent(ctx, id, "", nil)
+	return m.DeleteWithEvent(ctx, id, "", "", nil)
 }
 
-func (m *memRepo) DeleteWithEvent(ctx context.Context, id, eventType string, eventPayload []byte) error {
+func (m *memRepo) DeleteWithEvent(ctx context.Context, id, eventType, eventID string, eventPayload []byte) error {
 	if _, ok := m.items[id]; !ok {
 		return apperrors.ErrNotFound
 	}
@@ -117,12 +123,16 @@ func (d *trackingDoc) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func newUsecase(repo sample.Repository, cache sample.CacheRepository, doc sample.DocumentRepository) *usecase.SampleUsecase {
+	return usecase.New(repo, cache, doc, telemetry.NoopLogger{}, telemetry.NoopTracer{}, telemetry.NoopSampleMetrics{})
+}
+
 func TestSampleUsecase_CRUD(t *testing.T) {
 	ctx := testutil.NewContext()
 	repo := newMemRepo()
 	cache := &trackingCache{}
 	doc := &trackingDoc{}
-	uc := usecase.New(repo, cache, doc)
+	uc := newUsecase(repo, cache, doc)
 
 	created, err := uc.Create(ctx, "alpha", "desc", entity.StatusActive)
 	require.NoError(t, err)
@@ -158,7 +168,7 @@ func TestSampleUsecase_CRUD(t *testing.T) {
 func TestSampleUsecase_MongoFailureDoesNotFailRequest(t *testing.T) {
 	ctx := testutil.NewContext()
 	failingDoc := failingDocRepo{}
-	uc := usecase.New(newMemRepo(), &trackingCache{}, failingDoc)
+	uc := newUsecase(newMemRepo(), &trackingCache{}, failingDoc)
 
 	created, err := uc.Create(ctx, "alpha", "desc", entity.StatusActive)
 	require.NoError(t, err)
@@ -168,7 +178,7 @@ func TestSampleUsecase_MongoFailureDoesNotFailRequest(t *testing.T) {
 func TestSampleUsecase_EventPayloadIsValidEnvelope(t *testing.T) {
 	ctx := testutil.NewContext()
 	repo := &capturingRepo{inner: newMemRepo()}
-	uc := usecase.New(repo, &trackingCache{}, &trackingDoc{})
+	uc := newUsecase(repo, &trackingCache{}, &trackingDoc{})
 
 	_, err := uc.Create(ctx, "alpha", "desc", entity.StatusActive)
 	require.NoError(t, err)
@@ -177,6 +187,7 @@ func TestSampleUsecase_EventPayloadIsValidEnvelope(t *testing.T) {
 	var env event.Envelope
 	require.NoError(t, json.Unmarshal(repo.lastPayload, &env))
 	require.Equal(t, event.TypeCreated, env.Type)
+	require.NotEmpty(t, env.EventID)
 	require.Equal(t, "alpha", env.Sample.Name)
 }
 
@@ -186,11 +197,11 @@ type capturingRepo struct {
 }
 
 func (c *capturingRepo) Create(ctx context.Context, sample *entity.Sample) error {
-	return c.CreateWithEvent(ctx, sample, "", nil)
+	return c.CreateWithEvent(ctx, sample, "", "", nil)
 }
-func (c *capturingRepo) CreateWithEvent(ctx context.Context, sample *entity.Sample, eventType string, eventPayload []byte) error {
+func (c *capturingRepo) CreateWithEvent(ctx context.Context, sample *entity.Sample, eventType, eventID string, eventPayload []byte) error {
 	c.lastPayload = append([]byte(nil), eventPayload...)
-	return c.inner.CreateWithEvent(ctx, sample, eventType, eventPayload)
+	return c.inner.CreateWithEvent(ctx, sample, eventType, eventID, eventPayload)
 }
 func (c *capturingRepo) GetByID(ctx context.Context, id string) (*entity.Sample, error) {
 	return c.inner.GetByID(ctx, id)
@@ -199,16 +210,16 @@ func (c *capturingRepo) List(ctx context.Context, limit, offset int) ([]entity.S
 	return c.inner.List(ctx, limit, offset)
 }
 func (c *capturingRepo) Update(ctx context.Context, sample *entity.Sample) error {
-	return c.UpdateWithEvent(ctx, sample, "", nil)
+	return c.UpdateWithEvent(ctx, sample, "", "", nil)
 }
-func (c *capturingRepo) UpdateWithEvent(ctx context.Context, sample *entity.Sample, eventType string, eventPayload []byte) error {
-	return c.inner.UpdateWithEvent(ctx, sample, eventType, eventPayload)
+func (c *capturingRepo) UpdateWithEvent(ctx context.Context, sample *entity.Sample, eventType, eventID string, eventPayload []byte) error {
+	return c.inner.UpdateWithEvent(ctx, sample, eventType, eventID, eventPayload)
 }
 func (c *capturingRepo) Delete(ctx context.Context, id string) error {
-	return c.DeleteWithEvent(ctx, id, "", nil)
+	return c.DeleteWithEvent(ctx, id, "", "", nil)
 }
-func (c *capturingRepo) DeleteWithEvent(ctx context.Context, id, eventType string, eventPayload []byte) error {
-	return c.inner.DeleteWithEvent(ctx, id, eventType, eventPayload)
+func (c *capturingRepo) DeleteWithEvent(ctx context.Context, id, eventType, eventID string, eventPayload []byte) error {
+	return c.inner.DeleteWithEvent(ctx, id, eventType, eventID, eventPayload)
 }
 
 type failingDocRepo struct{}

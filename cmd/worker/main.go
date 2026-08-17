@@ -35,8 +35,16 @@ func run() error {
 	worker.Consumer.Start(ctx)
 
 	container.Lifecycle.Add(func(ctx context.Context) error {
+		worker.OutboxRelay.Stop()
+		return nil
+	})
+	container.Lifecycle.Add(func(ctx context.Context) error {
 		return worker.Consumer.Close()
 	})
+	container.Lifecycle.Add(func(ctx context.Context) error {
+		return worker.DLQProducer.Close()
+	})
+
 	container.Lifecycle.Wait(ctx)
 	return nil
 }

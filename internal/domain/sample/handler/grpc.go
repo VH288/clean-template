@@ -3,9 +3,9 @@ package handler
 import (
 	"context"
 
+	"clean-template/internal/domain/ports"
 	"clean-template/internal/domain/sample"
 	"clean-template/internal/domain/sample/entity"
-	"clean-template/internal/infrastructure/metrics"
 	apperrors "clean-template/internal/pkg/errors"
 	samplev1 "clean-template/internal/proto/sample/v1"
 
@@ -17,36 +17,37 @@ import (
 type GRPCHandler struct {
 	samplev1.UnimplementedSampleServiceServer
 	usecase sample.Usecase
+	metrics ports.GRPCMetrics
 }
 
-func NewGRPCHandler(usecase sample.Usecase) *GRPCHandler {
-	return &GRPCHandler{usecase: usecase}
+func NewGRPCHandler(usecase sample.Usecase, metrics ports.GRPCMetrics) *GRPCHandler {
+	return &GRPCHandler{usecase: usecase, metrics: metrics}
 }
 
 func (h *GRPCHandler) CreateSample(ctx context.Context, req *samplev1.CreateSampleRequest) (*samplev1.SampleResponse, error) {
 	result, err := h.usecase.Create(ctx, req.GetName(), req.GetDescription(), req.GetStatus())
 	if err != nil {
-		metrics.GRPCRequestsTotal.WithLabelValues("CreateSample", "error").Inc()
+		h.metrics.IncRequest("CreateSample", "error")
 		return nil, toGRPCError(err)
 	}
-	metrics.GRPCRequestsTotal.WithLabelValues("CreateSample", "ok").Inc()
+	h.metrics.IncRequest("CreateSample", "ok")
 	return toProtoSample(result), nil
 }
 
 func (h *GRPCHandler) GetSample(ctx context.Context, req *samplev1.GetSampleRequest) (*samplev1.SampleResponse, error) {
 	result, err := h.usecase.GetByID(ctx, req.GetId())
 	if err != nil {
-		metrics.GRPCRequestsTotal.WithLabelValues("GetSample", "error").Inc()
+		h.metrics.IncRequest("GetSample", "error")
 		return nil, toGRPCError(err)
 	}
-	metrics.GRPCRequestsTotal.WithLabelValues("GetSample", "ok").Inc()
+	h.metrics.IncRequest("GetSample", "ok")
 	return toProtoSample(result), nil
 }
 
 func (h *GRPCHandler) ListSamples(ctx context.Context, req *samplev1.ListSamplesRequest) (*samplev1.ListSamplesResponse, error) {
 	items, total, err := h.usecase.List(ctx, int(req.GetPage()), int(req.GetPerPage()))
 	if err != nil {
-		metrics.GRPCRequestsTotal.WithLabelValues("ListSamples", "error").Inc()
+		h.metrics.IncRequest("ListSamples", "error")
 		return nil, toGRPCError(err)
 	}
 
@@ -54,26 +55,26 @@ func (h *GRPCHandler) ListSamples(ctx context.Context, req *samplev1.ListSamples
 	for i := range items {
 		resp.Items = append(resp.Items, toProtoSample(&items[i]))
 	}
-	metrics.GRPCRequestsTotal.WithLabelValues("ListSamples", "ok").Inc()
+	h.metrics.IncRequest("ListSamples", "ok")
 	return resp, nil
 }
 
 func (h *GRPCHandler) UpdateSample(ctx context.Context, req *samplev1.UpdateSampleRequest) (*samplev1.SampleResponse, error) {
 	result, err := h.usecase.Update(ctx, req.GetId(), req.GetName(), req.GetDescription(), req.GetStatus())
 	if err != nil {
-		metrics.GRPCRequestsTotal.WithLabelValues("UpdateSample", "error").Inc()
+		h.metrics.IncRequest("UpdateSample", "error")
 		return nil, toGRPCError(err)
 	}
-	metrics.GRPCRequestsTotal.WithLabelValues("UpdateSample", "ok").Inc()
+	h.metrics.IncRequest("UpdateSample", "ok")
 	return toProtoSample(result), nil
 }
 
 func (h *GRPCHandler) DeleteSample(ctx context.Context, req *samplev1.DeleteSampleRequest) (*samplev1.DeleteSampleResponse, error) {
 	if err := h.usecase.Delete(ctx, req.GetId()); err != nil {
-		metrics.GRPCRequestsTotal.WithLabelValues("DeleteSample", "error").Inc()
+		h.metrics.IncRequest("DeleteSample", "error")
 		return nil, toGRPCError(err)
 	}
-	metrics.GRPCRequestsTotal.WithLabelValues("DeleteSample", "ok").Inc()
+	h.metrics.IncRequest("DeleteSample", "ok")
 	return &samplev1.DeleteSampleResponse{Success: true}, nil
 }
 

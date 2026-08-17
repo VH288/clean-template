@@ -72,7 +72,7 @@ func TestPostgresRepository_CreateWithEvent_Integration(t *testing.T) {
 		Status:      entity.StatusActive,
 	}
 	payload := []byte(`{"type":"sample.created","sample":{"id":"","name":"outbox"}}`)
-	require.NoError(t, repo.CreateWithEvent(ctx, sample, "sample.created", payload))
+	require.NoError(t, repo.CreateWithEvent(ctx, sample, "sample.created", "evt-1", payload))
 
 	var count int
 	require.NoError(t, db.Get(&count, `SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1 AND status = 'pending'`, sample.ID))

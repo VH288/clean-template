@@ -4,8 +4,7 @@ import (
 	"context"
 
 	"clean-template/internal/domain/healthcheck"
-	"clean-template/internal/infrastructure/apm"
-	"clean-template/internal/infrastructure/metrics"
+	"clean-template/internal/domain/ports"
 	"clean-template/internal/pkg/constant"
 )
 
@@ -14,6 +13,8 @@ type HealthUsecase struct {
 	redis    healthcheck.RedisChecker
 	mongo    healthcheck.MongoChecker
 	grpc     healthcheck.GRPCChecker
+	trace    ports.Tracer
+	metrics  ports.HealthMetrics
 }
 
 func New(
@@ -21,19 +22,23 @@ func New(
 	redis healthcheck.RedisChecker,
 	mongo healthcheck.MongoChecker,
 	grpc healthcheck.GRPCChecker,
+	trace ports.Tracer,
+	metrics ports.HealthMetrics,
 ) *HealthUsecase {
 	return &HealthUsecase{
 		postgres: postgres,
 		redis:    redis,
 		mongo:    mongo,
 		grpc:     grpc,
+		trace:    trace,
+		metrics:  metrics,
 	}
 }
 
 // CheckHTTP verifies Postgres + Redis (typical synchronous HTTP dependencies).
 func (u *HealthUsecase) CheckHTTP(ctx context.Context) *healthcheck.Report {
-	ctx, span := apm.Start(ctx, "healthcheck.CheckHTTP")
-	defer span.End()
+	ctx, end := u.trace.Start(ctx, "healthcheck.CheckHTTP")
+	defer end()
 
 	deps := []healthcheck.DependencyStatus{
 		u.check("postgres", func() error { return u.postgres.Ping(ctx) }),
@@ -43,11 +48,9 @@ func (u *HealthUsecase) CheckHTTP(ctx context.Context) *healthcheck.Report {
 }
 
 // CheckGRPC verifies upstream gRPC via standard grpc.health.v1.
-// Recommended: expose Health service on every gRPC server and probe critical
-// upstream RPCs this way instead of inventing custom ping RPCs.
 func (u *HealthUsecase) CheckGRPC(ctx context.Context) *healthcheck.Report {
-	ctx, span := apm.Start(ctx, "healthcheck.CheckGRPC")
-	defer span.End()
+	ctx, end := u.trace.Start(ctx, "healthcheck.CheckGRPC")
+	defer end()
 
 	deps := []healthcheck.DependencyStatus{
 		u.check("grpc_upstream", func() error {
@@ -62,8 +65,8 @@ func (u *HealthUsecase) CheckGRPC(ctx context.Context) *healthcheck.Report {
 
 // CheckWebSocket verifies MongoDB — used by realtime/document flows behind WS.
 func (u *HealthUsecase) CheckWebSocket(ctx context.Context) *healthcheck.Report {
-	ctx, span := apm.Start(ctx, "healthcheck.CheckWebSocket")
-	defer span.End()
+	ctx, end := u.trace.Start(ctx, "healthcheck.CheckWebSocket")
+	defer end()
 
 	deps := []healthcheck.DependencyStatus{
 		u.check("mongodb", func() error { return u.mongo.Ping(ctx) }),
@@ -76,10 +79,10 @@ func (u *HealthUsecase) check(name string, fn func() error) healthcheck.Dependen
 	if err := fn(); err != nil {
 		status.Status = constant.HealthStatusDOWN
 		status.Message = err.Error()
-		metrics.HealthcheckStatus.WithLabelValues(name).Set(0)
+		u.metrics.SetDependencyStatus(name, false)
 		return status
 	}
-	metrics.HealthcheckStatus.WithLabelValues(name).Set(1)
+	u.metrics.SetDependencyStatus(name, true)
 	return status
 }
 
