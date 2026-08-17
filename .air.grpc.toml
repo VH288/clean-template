@@ -1,0 +1,27 @@
+# Live reload for gRPC-only server (cmd/grpc). Use: make air-grpc
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  bin = "./tmp/grpc"
+  cmd = "go build -o ./tmp/grpc ./cmd/grpc"
+  entrypoint = ["./tmp/grpc"]
+  delay = 1000
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "bin", "deployments", "docs", ".github"]
+  exclude_regex = ["_test\\.go$"]
+  include_ext = ["go", "tpl", "tmpl", "html"]
+  log = "build-errors.grpc.log"
+  send_interrupt = true
+  stop_on_error = true
+
+[color]
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true

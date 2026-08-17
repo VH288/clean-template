@@ -1,16 +1,21 @@
-.PHONY: help run run-api run-grpc run-worker migrate-up migrate-down migrate-status \
+.PHONY: help run run-api run-grpc run-worker air air-api air-grpc air-worker \
+	migrate-up migrate-down migrate-status \
 	proto test test-unit test-integration tidy build docker-up docker-down lint
 
 APP_NAME ?= clean-template
 CONFIG ?= configs/config.yaml
 GO ?= go
 PROTOC ?= protoc
+AIR ?= $(shell go env GOPATH)/bin/air
 
 help:
 	@echo "Targets:"
 	@echo "  run / run-api       - run HTTP+gRPC API (cmd/api)"
 	@echo "  run-grpc            - run gRPC-only server"
 	@echo "  run-worker          - run Kafka consumer worker"
+	@echo "  air / air-api       - live reload API (air)"
+	@echo "  air-grpc            - live reload gRPC server (air)"
+	@echo "  air-worker          - live reload worker (air)"
 	@echo "  migrate-up|down|status - goose migrations"
 	@echo "  proto               - generate protobuf stubs"
 	@echo "  test / test-unit / test-integration"
@@ -26,6 +31,17 @@ run-grpc:
 
 run-worker:
 	$(GO) run ./cmd/worker
+
+air: air-api
+
+air-api:
+	$(AIR)
+
+air-grpc:
+	$(AIR) -c .air.grpc.toml
+
+air-worker:
+	$(AIR) -c .air.worker.toml
 
 migrate-up:
 	$(GO) run ./cmd/migrate -dir migrations up
