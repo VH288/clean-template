@@ -112,6 +112,7 @@ func (u *SampleUsecase) List(ctx context.Context, page, perPage int) ([]entity.S
 	page, perPage, offset := utils.NormalizePagination(page, perPage)
 	items, total, err := u.repo.List(ctx, perPage, offset)
 	if err != nil {
+		u.log.Error(ctx, err.Error(), err)
 		u.metrics.IncOperation("list", "error")
 		return nil, 0, apperrors.Wrap(err, apperrors.CodeInternal, "failed to list samples")
 	}

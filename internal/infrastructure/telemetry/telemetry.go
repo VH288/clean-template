@@ -31,6 +31,10 @@ func (SlogLogger) Warn(ctx context.Context, msg string, args ...any) {
 	logger.FromContext(ctx).Warn(msg, args...)
 }
 
+func (SlogLogger) Error(ctx context.Context, msg string, args ...any) {
+	logger.FromContext(ctx).Error(msg, args...)
+}
+
 type SampleMetrics struct{}
 
 func NewSampleMetrics() *SampleMetrics { return &SampleMetrics{} }
@@ -81,15 +85,16 @@ func (NoopTracer) Start(ctx context.Context, _ string) (context.Context, func())
 
 type NoopLogger struct{}
 
-func (NoopLogger) Info(context.Context, string, ...any) {}
-func (NoopLogger) Warn(context.Context, string, ...any) {}
+func (NoopLogger) Info(context.Context, string, ...any)  {}
+func (NoopLogger) Warn(context.Context, string, ...any)  {}
+func (NoopLogger) Error(context.Context, string, ...any) {}
 
 type NoopSampleMetrics struct{}
 
-func (NoopSampleMetrics) IncOperation(string, string)           {}
-func (NoopSampleMetrics) IncCacheInvalidate(string)             {}
-func (NoopSampleMetrics) IncCacheOperation(string, string)      {}
-func (NoopSampleMetrics) IncMongoSyncFailure(string)            {}
+func (NoopSampleMetrics) IncOperation(string, string)      {}
+func (NoopSampleMetrics) IncCacheInvalidate(string)        {}
+func (NoopSampleMetrics) IncCacheOperation(string, string) {}
+func (NoopSampleMetrics) IncMongoSyncFailure(string)       {}
 
 type NoopHealthMetrics struct{}
 

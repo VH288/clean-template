@@ -30,6 +30,7 @@ func (c *Container) HTTPRouter() http.Handler {
 		[]string{"/api/v1/health", "/api/v1/ws/health"},
 		middleware.APIKeyAuth(c.Config.App.Secret),
 	)
+	_ = auth
 
 	return router.New(router.Dependencies{
 		SampleHTTP:  c.Sample.HTTP,
@@ -39,7 +40,7 @@ func (c *Container) HTTPRouter() http.Handler {
 		Middlewares: c.middlewares(),
 		MetricsPath: c.Config.Observability.MetricsPath,
 		MetricsAuth: middleware.MetricsAuth(c.Config.App.Secret),
-		APIAuth:     auth,
+		// APIAuth:     auth,
 	})
 }
 

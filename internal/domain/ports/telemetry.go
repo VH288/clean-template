@@ -11,6 +11,7 @@ type Tracer interface {
 type Logger interface {
 	Info(ctx context.Context, msg string, args ...any)
 	Warn(ctx context.Context, msg string, args ...any)
+	Error(ctx context.Context, msg string, args ...any)
 }
 
 // SampleMetrics records sample-domain counters.
