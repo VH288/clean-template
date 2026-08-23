@@ -32,6 +32,7 @@ Start here, then follow dependency order:
 8. **[Protobuf](layers/proto.md)** — `.proto` sources and generation workflow
 9. **[Migrations](layers/migrations.md)** — Goose SQL migrations
 10. **[Root and tooling](root-and-tooling.md)** — Makefile, Dockerfile, CI, `go.mod`
+11. **[Microservice SDK Guide](sdk/README.md)** — Architecture analysis, SDK extraction vs microservice boundaries
 
 ## Architecture decision records
 
@@ -52,3 +53,4 @@ Start here, then follow dependency order:
 | [layers/proto.md](layers/proto.md) | `internal/proto/**` |
 | [layers/migrations.md](layers/migrations.md) | `migrations/*.sql` |
 | [root-and-tooling.md](root-and-tooling.md) | Makefile, Docker, CI, scripts, module |
+| [sdk/README.md](sdk/README.md) | Architecture analysis & SDK extraction boundaries |
