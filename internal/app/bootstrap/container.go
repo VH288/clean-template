@@ -22,10 +22,9 @@ type Container struct {
 	Config *config.Config
 	Logger *slog.Logger
 
-	Infra       *Infra
-	Sample      *Sample
-	Healthcheck *Healthcheck
-	Lifecycle   *lifecycle.Manager
+	Infra     *Infra
+	Lifecycle *lifecycle.Manager
+	Domain
 }
 
 // Infra holds shared infrastructure dependencies.

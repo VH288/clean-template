@@ -16,12 +16,11 @@ func Build(ctx context.Context, cfg *config.Config) (*Container, error) {
 	}
 
 	return &Container{
-		Config:      cfg,
-		Logger:      infra.Logger,
-		Infra:       infra,
-		Sample:      wireSample(infra),
-		Healthcheck: wireHealthcheck(infra),
-		Lifecycle:   wireLifecycle(infra),
+		Config:    cfg,
+		Logger:    infra.Logger,
+		Infra:     infra,
+		Domain:    getDomain(infra),
+		Lifecycle: wireLifecycle(infra),
 	}, nil
 }
 
